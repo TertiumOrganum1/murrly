@@ -1,0 +1,16 @@
+[Unit]
+Description=voice-input — local push-to-talk speech-to-text daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+# X11 access for gohook/xclip/xdotool — systemd --user does not inherit the
+# graphical session environment by default.
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
+ExecStart=%h/.local/bin/voice-input
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

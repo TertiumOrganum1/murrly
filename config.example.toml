@@ -1,0 +1,24 @@
+[hotkey]
+key = "F12"
+mode = "push_to_talk"
+
+[audio]
+device = ""
+sample_rate = 16000
+
+[whisper]
+model_path = "~/.local/share/voice-input/models/ggml-large-v3.bin"
+device = "cuda"
+compute_type = "float16"
+language = ""
+beam_size = 5
+initial_prompt = """
+Мы обсуждаем программирование и архитектуру: React, TypeScript,
+Docker, Kubernetes, microservices, middleware, observability,
+PostgreSQL, gRPC, REST, Redis, Kafka, CI/CD, monorepo,
+frontend, backend, service mesh.
+"""
+
+[output]
+paste_delay_ms = 80
+restore_primary = true

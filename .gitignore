@@ -1,0 +1,10 @@
+/bin/
+/third_party/
+/models/
+*.o
+*.a
+*.log
+.env
+config.toml
+.idea/
+.vscode/
