@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"embed"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 	"github.com/tertiumorganum1/voice-input/internal/clipboard"
 	"github.com/tertiumorganum1/voice-input/internal/config"
 	"github.com/tertiumorganum1/voice-input/internal/hotkey"
+	"github.com/tertiumorganum1/voice-input/internal/logfile"
 	"github.com/tertiumorganum1/voice-input/internal/paster"
 	"github.com/tertiumorganum1/voice-input/internal/recorder"
 	"github.com/tertiumorganum1/voice-input/internal/transcriber"
@@ -23,6 +25,9 @@ import (
 var iconFS embed.FS
 
 func main() {
+	closeLog := setupLogging()
+	defer closeLog()
+
 	cfgPath, err := config.DefaultPath()
 	if err != nil {
 		log.Fatal(err)
@@ -103,6 +108,26 @@ func main() {
 
 	t.Run() // blocks until systray.Quit() is called
 	hk.Stop()
+}
+
+func setupLogging() func() {
+	path, err := logfile.DefaultPath("voice-input")
+	if err != nil {
+		log.Printf("log path: %v", err)
+		return func() {}
+	}
+	file, err := logfile.Open(path, 5*1024*1024, 5)
+	if err != nil {
+		log.Printf("open log %s: %v", path, err)
+		return func() {}
+	}
+	log.SetOutput(io.MultiWriter(os.Stderr, file))
+	log.Printf("log file: %s", path)
+	return func() {
+		if err := file.Close(); err != nil {
+			log.Printf("close log: %v", err)
+		}
+	}
 }
 
 func toTrayState(s app.State) tray.State {

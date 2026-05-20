@@ -12,7 +12,7 @@ MODEL ?= large-v3
 MODEL_DIR := models
 INSTALL_DATA_DIR := $(HOME)/.local/share/voice-input
 
-.PHONY: all whisper model build install autostart uninstall-autostart clean
+.PHONY: all whisper model build install start autostart uninstall-autostart clean
 
 all: build
 
@@ -42,6 +42,9 @@ build: whisper
 
 install: build
 	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" scripts/install-linux-desktop.sh
+
+start:
+	scripts/start-linux-desktop.sh
 
 autostart: build
 	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" AUTOSTART=1 scripts/install-linux-desktop.sh
