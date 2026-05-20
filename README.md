@@ -12,7 +12,7 @@
 - глобальная клавиша push-to-talk;
 - распознавание речи через локальную модель Whisper;
 - вставка результата в текущее окно через `xclip` и `xdotool`;
-- иконка в системном трее;
+- иконка и меню в системном трее;
 - постобработка текста: пробелы после пунктуации, удаление типичных
   hallucination-фраз Whisper вроде `Продолжение следует...`,
   `Субтитры сделал ...`, `В этом видео я покажу ...`;
@@ -39,7 +39,9 @@ scripts/bootstrap-ubuntu.sh
 - собирает `whisper.cpp`;
 - скачивает модель `ggml-large-v3.bin`;
 - копирует модель в `~/.local/share/voice-input/models/`;
-- собирает бинарник `bin/voice-input`.
+- собирает бинарник `bin/voice-input`;
+- устанавливает приложение в `~/.local/bin/voice-input`;
+- добавляет ярлык в меню приложений.
 
 Если CUDA toolkit не установлен, можно разрешить скрипту поставить пакет из
 репозитория дистрибутива:
@@ -48,10 +50,10 @@ scripts/bootstrap-ubuntu.sh
 INSTALL_CUDA_TOOLKIT=1 scripts/bootstrap-ubuntu.sh
 ```
 
-Чтобы сразу установить и запустить пользовательский systemd-сервис:
+Чтобы включить автозапуск при входе в графическую сессию:
 
 ```bash
-INSTALL_SERVICE=1 scripts/bootstrap-ubuntu.sh
+AUTOSTART=1 scripts/bootstrap-ubuntu.sh
 ```
 
 Можно выбрать другую модель:
@@ -68,20 +70,34 @@ make model
 make build
 ```
 
-Установка бинарника, systemd unit и локально скачанных моделей:
+Установка бинарника, ярлыка приложения и локально скачанных моделей:
 
 ```bash
 make install
-systemctl --user enable --now voice-input.service
 ```
 
-Полезные команды:
+Если была установлена старая версия как user-service, `make install` отключит
+ее и уберет старый unit-файл.
+
+После установки запустите `voice-input` из меню приложений или командой:
 
 ```bash
-systemctl --user status voice-input.service
-systemctl --user restart voice-input.service
-systemctl --user stop voice-input.service
-journalctl --user -u voice-input.service -f
+~/.local/bin/voice-input
+```
+
+Приложение работает как обычный tray-app. В трее есть меню, через которое его
+можно закрыть.
+
+Автозапуск:
+
+```bash
+make autostart
+```
+
+Отключить автозапуск:
+
+```bash
+make uninstall-autostart
 ```
 
 ## Конфигурация
@@ -120,24 +136,19 @@ restore_primary = true
 `language = ""` означает автоопределение языка. Для русской речи можно оставить
 автоопределение или явно указать `language = "ru"`.
 
-После изменения конфига перезапустите сервис:
-
-```bash
-systemctl --user restart voice-input.service
-```
+После изменения конфига закройте приложение через меню в трее и запустите его
+заново.
 
 ## Отладочный запуск
 
+Закройте уже запущенное приложение через меню в трее и запустите бинарник из
+терминала:
+
 ```bash
-systemctl --user stop voice-input.service
 ~/.local/bin/voice-input
 ```
 
-В логах видно итоговый распознанный текст:
-
-```bash
-journalctl --user -u voice-input.service -f
-```
+В терминале будет видно итоговый распознанный текст и ошибки.
 
 ## Файлы, которые не входят в репозиторий
 

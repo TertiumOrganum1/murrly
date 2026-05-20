@@ -2,7 +2,8 @@
 set -euo pipefail
 
 MODEL="${MODEL:-large-v3}"
-INSTALL_SERVICE="${INSTALL_SERVICE:-0}"
+INSTALL_APP="${INSTALL_APP:-1}"
+AUTOSTART="${AUTOSTART:-0}"
 INSTALL_CUDA_TOOLKIT="${INSTALL_CUDA_TOOLKIT:-0}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -88,10 +89,13 @@ install -m 0644 "models/ggml-$MODEL.bin" "$HOME/.local/share/voice-input/models/
 echo "Building voice-input..."
 make build CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
 
-if [[ "$INSTALL_SERVICE" == "1" ]]; then
-	echo "Installing user service..."
-	make install CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
-	systemctl --user enable --now voice-input.service
+if [[ "$INSTALL_APP" == "1" ]]; then
+	echo "Installing desktop app..."
+	if [[ "$AUTOSTART" == "1" ]]; then
+		make autostart CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
+	else
+		make install CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
+	fi
 fi
 
 cat <<MSG
@@ -100,6 +104,9 @@ Done.
 Binary: $REPO_ROOT/bin/voice-input
 Model:  $REPO_ROOT/models/ggml-$MODEL.bin
 
-To install and start the user service later:
-  INSTALL_SERVICE=1 scripts/bootstrap-ubuntu.sh
+To start the app:
+  ~/.local/bin/voice-input
+
+To enable autostart:
+  make autostart
 MSG

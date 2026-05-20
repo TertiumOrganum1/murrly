@@ -12,7 +12,7 @@ MODEL ?= large-v3
 MODEL_DIR := models
 INSTALL_DATA_DIR := $(HOME)/.local/share/voice-input
 
-.PHONY: all whisper model build install clean
+.PHONY: all whisper model build install autostart uninstall-autostart clean
 
 all: build
 
@@ -41,13 +41,13 @@ build: whisper
 	go build -ldflags "-extldflags '$(CUDA_LDFLAGS)'" -o $(BIN) ./cmd/voice-input
 
 install: build
-	mkdir -p $$HOME/.local/bin $$HOME/.config/systemd/user "$(INSTALL_DATA_DIR)/models"
-	install -m 0755 $(BIN) $$HOME/.local/bin/voice-input
-	install -m 0644 systemd/voice-input.service $$HOME/.config/systemd/user/
-	@if compgen -G "$(MODEL_DIR)/*.bin" >/dev/null; then \
-		install -m 0644 $(MODEL_DIR)/*.bin "$(INSTALL_DATA_DIR)/models/"; \
-	fi
-	systemctl --user daemon-reload
+	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" scripts/install-linux-desktop.sh
+
+autostart: build
+	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" AUTOSTART=1 scripts/install-linux-desktop.sh
+
+uninstall-autostart:
+	rm -f $$HOME/.config/autostart/voice-input.desktop
 
 clean:
 	rm -rf bin
