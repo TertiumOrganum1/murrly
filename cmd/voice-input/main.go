@@ -18,6 +18,7 @@ import (
 	"github.com/tertiumorganum1/voice-input/internal/paster"
 	"github.com/tertiumorganum1/voice-input/internal/recorder"
 	"github.com/tertiumorganum1/voice-input/internal/transcriber"
+	"github.com/tertiumorganum1/voice-input/internal/transcripthistory"
 	"github.com/tertiumorganum1/voice-input/internal/tray"
 )
 
@@ -64,8 +65,19 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	history := transcripthistory.New(3)
 
-	t := tray.New(icons, cfgPath, tray.Actions{
+	var t *tray.Tray
+	t = tray.New(icons, cfgPath, tray.Actions{
+		OnCopyTranscript: func(index int) {
+			text, ok := history.Get(index)
+			if !ok {
+				return
+			}
+			if err := cb.Set(text); err != nil {
+				log.Printf("copy transcript %d: %v", index, err)
+			}
+		},
 		OnQuit: cancel,
 	})
 
@@ -76,6 +88,10 @@ func main() {
 		Paster:      paster.New(),
 		PasteDelay:  time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond,
 		OnState:     func(s app.State) { t.SetState(toTrayState(s)) },
+		OnTranscript: func(text string) {
+			history.Add(text)
+			t.SetRecentTranscripts(history.Snapshot())
+		},
 	})
 
 	hk, err := hotkey.New(cfg.Hotkey.Key)

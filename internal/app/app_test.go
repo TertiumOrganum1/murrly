@@ -130,14 +130,16 @@ func TestHappyPath(t *testing.T) {
 	cb := &fakeClipboard{}
 	pa := &fakePaster{}
 	st := &recordedStates{}
+	var transcripts []string
 
 	a := New(Config{
-		Recorder:    rec,
-		Transcriber: tr,
-		Clipboard:   cb,
-		Paster:      pa,
-		OnState:     st.Set,
-		PasteDelay:  10 * time.Millisecond,
+		Recorder:     rec,
+		Transcriber:  tr,
+		Clipboard:    cb,
+		Paster:       pa,
+		OnState:      st.Set,
+		OnTranscript: func(text string) { transcripts = append(transcripts, text) },
+		PasteDelay:   10 * time.Millisecond,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -163,6 +165,9 @@ func TestHappyPath(t *testing.T) {
 	if !cb.restored {
 		t.Error("clipboard not restored")
 	}
+	if len(transcripts) != 1 || transcripts[0] != "hello world" {
+		t.Fatalf("transcripts = %v", transcripts)
+	}
 	if !st.Contains(StateRecording) {
 		t.Error("never entered StateRecording")
 	}
@@ -177,14 +182,16 @@ func TestEmptyTranscriptionSkipsPaste(t *testing.T) {
 	cb := &fakeClipboard{}
 	pa := &fakePaster{}
 	st := &recordedStates{}
+	calledTranscript := false
 
 	a := New(Config{
-		Recorder:    rec,
-		Transcriber: tr,
-		Clipboard:   cb,
-		Paster:      pa,
-		OnState:     st.Set,
-		PasteDelay:  10 * time.Millisecond,
+		Recorder:     rec,
+		Transcriber:  tr,
+		Clipboard:    cb,
+		Paster:       pa,
+		OnState:      st.Set,
+		OnTranscript: func(string) { calledTranscript = true },
+		PasteDelay:   10 * time.Millisecond,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -203,5 +210,8 @@ func TestEmptyTranscriptionSkipsPaste(t *testing.T) {
 	}
 	if pa.pasted {
 		t.Error("paste should not happen when text is empty")
+	}
+	if calledTranscript {
+		t.Error("OnTranscript should not be called when text is empty")
 	}
 }

@@ -45,12 +45,13 @@ type Paster interface {
 }
 
 type Config struct {
-	Recorder    Recorder
-	Transcriber Transcriber
-	Clipboard   Clipboard
-	Paster      Paster
-	OnState     func(State)
-	PasteDelay  time.Duration
+	Recorder     Recorder
+	Transcriber  Transcriber
+	Clipboard    Clipboard
+	Paster       Paster
+	OnState      func(State)
+	OnTranscript func(string)
+	PasteDelay   time.Duration
 }
 
 type App struct {
@@ -113,6 +114,9 @@ func (a *App) finish() {
 	if text == "" {
 		a.setState(StateIdle)
 		return
+	}
+	if a.cfg.OnTranscript != nil {
+		a.cfg.OnTranscript(text)
 	}
 
 	saved, err := a.cfg.Clipboard.Save()
