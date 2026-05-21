@@ -1,4 +1,4 @@
-module github.com/tertiumorganum1/voice-input
+module github.com/tertiumorganum1/murrly
 
 go 1.25.2
 
