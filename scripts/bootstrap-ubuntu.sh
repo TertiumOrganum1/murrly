@@ -83,10 +83,10 @@ echo "Building whisper.cpp and downloading model: $MODEL"
 make model MODEL="$MODEL" CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
 
 echo "Installing model into user data directory..."
-mkdir -p "$HOME/.local/share/voice-input/models"
-install -m 0644 "models/ggml-$MODEL.bin" "$HOME/.local/share/voice-input/models/"
+mkdir -p "$HOME/.local/share/murrly/models"
+install -m 0644 "models/ggml-$MODEL.bin" "$HOME/.local/share/murrly/models/"
 
-echo "Building voice-input..."
+echo "Building murrly..."
 make build CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
 
 if [[ "$INSTALL_APP" == "1" ]]; then
@@ -101,11 +101,11 @@ fi
 cat <<MSG
 Done.
 
-Binary: $REPO_ROOT/bin/voice-input
+Binary: $REPO_ROOT/bin/murrly
 Model:  $REPO_ROOT/models/ggml-$MODEL.bin
 
 To start the app:
-  ~/.local/bin/voice-input
+  ~/.local/bin/murrly
 
 To enable autostart:
   make autostart

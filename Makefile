@@ -10,7 +10,7 @@ CUDA_LDFLAGS := -lggml-cuda -lcudart -lcublas -lcuda -lstdc++
 CUDA_HOST_COMPILER ?= /usr/bin/g++-8
 MODEL ?= large-v3
 MODEL_DIR := models
-INSTALL_DATA_DIR := $(HOME)/.local/share/voice-input
+INSTALL_DATA_DIR := $(HOME)/.local/share/murrly
 
 .PHONY: all whisper model build install start autostart uninstall-autostart clean
 
@@ -41,16 +41,16 @@ build: whisper
 	go build -ldflags "-extldflags '$(CUDA_LDFLAGS)'" -o $(BIN) ./cmd/murrly
 
 install: build
-	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" scripts/install-linux-desktop.sh
+	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" scripts/install-linux.sh
 
 start:
-	scripts/start-linux-desktop.sh
+	scripts/start-linux.sh
 
 autostart: build
-	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" AUTOSTART=1 scripts/install-linux-desktop.sh
+	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" AUTOSTART=1 scripts/install-linux.sh
 
 uninstall-autostart:
-	rm -f $$HOME/.config/autostart/voice-input.desktop
+	rm -f $$HOME/.config/autostart/murrly.desktop
 
 clean:
 	rm -rf bin

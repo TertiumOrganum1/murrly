@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ID="voice-input"
-APP_NAME="voice-input"
+APP_ID="murrly"
+APP_NAME="Murrly"
 AUTOSTART="${AUTOSTART:-0}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-BIN_SRC="${BIN_SRC:-$REPO_ROOT/bin/voice-input}"
+BIN_SRC="${BIN_SRC:-$REPO_ROOT/bin/murrly}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 BIN_DEST="$BIN_DIR/$APP_ID"
-INSTALL_DATA_DIR="${INSTALL_DATA_DIR:-$HOME/.local/share/voice-input}"
+INSTALL_DATA_DIR="${INSTALL_DATA_DIR:-$HOME/.local/share/murrly}"
 
 APP_DIR="$HOME/.local/share/applications"
 ICON_DIR="$HOME/.local/share/icons/hicolor/64x64/apps"
 AUTOSTART_DIR="$HOME/.config/autostart"
-LEGACY_SERVICE="$HOME/.config/systemd/user/voice-input.service"
+LEGACY_SERVICE="$HOME/.config/systemd/user/murrly.service"
 
 if [[ ! -x "$BIN_SRC" ]]; then
 	echo "Binary not found or not executable: $BIN_SRC" >&2
@@ -32,7 +32,7 @@ write_desktop_file() {
 [Desktop Entry]
 Type=Application
 Name=$APP_NAME
-Comment=Local push-to-talk speech-to-text
+Comment=Murrly — local push-to-talk speech-to-text
 Exec=$BIN_DEST
 Icon=$APP_ID
 Terminal=false
@@ -53,7 +53,7 @@ remove_legacy_service() {
 	fi
 
 	if command -v systemctl >/dev/null 2>&1; then
-		systemctl --user disable --now voice-input.service >/dev/null 2>&1 || true
+		systemctl --user disable --now murrly.service >/dev/null 2>&1 || true
 	fi
 	rm -f "$LEGACY_SERVICE"
 	if command -v systemctl >/dev/null 2>&1; then
@@ -66,7 +66,7 @@ remove_legacy_service
 
 mkdir -p "$BIN_DIR" "$APP_DIR" "$ICON_DIR" "$INSTALL_DATA_DIR/models"
 install -m 0755 "$BIN_SRC" "$BIN_DEST"
-install -m 0644 "$REPO_ROOT/cmd/voice-input/assets/icon-idle.png" "$ICON_DIR/$APP_ID.png"
+install -m 0644 "$REPO_ROOT/cmd/murrly/assets/icon-idle.png" "$ICON_DIR/$APP_ID.png"
 
 if compgen -G "$REPO_ROOT/models/*.bin" >/dev/null; then
 	install -m 0644 "$REPO_ROOT"/models/*.bin "$INSTALL_DATA_DIR/models/"

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ID="voice-input"
+APP_ID="murrly"
 BIN="${BIN:-$HOME/.local/bin/$APP_ID}"
-LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/voice-input"
-LOG_FILE="$LOG_DIR/voice-input.log"
+LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/murrly"
+LOG_FILE="$LOG_DIR/murrly.log"
 
 mkdir -p "$LOG_DIR"
 
