@@ -1,11 +1,33 @@
-// Package hotkey listens for a global push-to-talk key on X11 via gohook.
+// Package hotkey grabs a global push-to-talk key on X11.
 package hotkey
+
+/*
+#cgo linux LDFLAGS: -lX11
+#include <X11/Xlib.h>
+#include <X11/XKBlib.h>
+#include <X11/keysym.h>
+
+static int vi_grab_key(Display* display, Window root, KeySym keysym, unsigned int modifiers) {
+	KeyCode keycode = XKeysymToKeycode(display, keysym);
+	if (keycode == 0) {
+		return 0;
+	}
+	XGrabKey(display, keycode, modifiers, root, False, GrabModeAsync, GrabModeAsync);
+	return 1;
+}
+
+static KeySym vi_keycode_to_keysym(Display* display, unsigned int keycode) {
+	return XkbKeycodeToKeysym(display, (KeyCode)keycode, 0, 0);
+}
+*/
+import "C"
 
 import (
 	"fmt"
 	"strings"
+	"time"
 
-	hook "github.com/robotn/gohook"
+	"unsafe"
 )
 
 type Event int
@@ -15,10 +37,8 @@ const (
 	EventUp
 )
 
-// X11 keysyms — what gohook reports as ev.Rawcode on Linux/X11.
-// We use these instead of hook.Keycode because that table contains
-// Windows-style VK codes which do not match what gohook delivers on X11.
-var x11Keysyms = map[string]uint16{
+// X11 keysyms for function keys.
+var x11Keysyms = map[string]C.KeySym{
 	"f1":  0xFFBE,
 	"f2":  0xFFBF,
 	"f3":  0xFFC0,
@@ -37,10 +57,11 @@ var x11Keysyms = map[string]uint16{
 }
 
 type Listener struct {
-	keysym  uint16
+	keysym  C.KeySym
 	events  chan Event
 	stop    chan struct{}
 	pressed bool
+	display *C.Display
 }
 
 func New(key string) (*Listener, error) {
@@ -60,31 +81,57 @@ func (l *Listener) Events() <-chan Event { return l.events }
 // Start begins listening. Blocks until Stop is called from another goroutine;
 // intended to be invoked from its own goroutine.
 func (l *Listener) Start() {
-	ch := hook.Start()
-	defer hook.End()
+	display := C.XOpenDisplay(nil)
+	if display == nil {
+		return
+	}
+	l.display = display
+	defer func() {
+		C.XCloseDisplay(display)
+		l.display = nil
+	}()
+
+	root := C.XDefaultRootWindow(display)
+	for _, modifiers := range []C.uint{0, C.LockMask, C.Mod2Mask, C.LockMask | C.Mod2Mask} {
+		if C.vi_grab_key(display, root, l.keysym, modifiers) == 0 {
+			return
+		}
+	}
+	C.XSelectInput(display, root, C.KeyPressMask|C.KeyReleaseMask)
+	C.XFlush(display)
 
 	for {
 		select {
 		case <-l.stop:
 			return
-		case ev, ok := <-ch:
-			if !ok {
-				return
+		default:
+		}
+
+		if C.XPending(display) == 0 {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+
+		var event C.XEvent
+		C.XNextEvent(display, &event)
+		eventType := xEventType(&event)
+		if eventType != C.KeyPress && eventType != C.KeyRelease {
+			continue
+		}
+		keyEvent := (*C.XKeyEvent)(unsafe.Pointer(&event))
+		if C.vi_keycode_to_keysym(display, C.uint(keyEvent.keycode)) != l.keysym {
+			continue
+		}
+		switch eventType {
+		case C.KeyPress:
+			if !l.pressed {
+				l.pressed = true
+				l.events <- EventDown
 			}
-			if ev.Rawcode != l.keysym {
-				continue
-			}
-			switch ev.Kind {
-			case hook.KeyDown, hook.KeyHold:
-				if !l.pressed {
-					l.pressed = true
-					l.events <- EventDown
-				}
-			case hook.KeyUp:
-				if l.pressed {
-					l.pressed = false
-					l.events <- EventUp
-				}
+		case C.KeyRelease:
+			if l.pressed {
+				l.pressed = false
+				l.events <- EventUp
 			}
 		}
 	}
@@ -92,5 +139,11 @@ func (l *Listener) Start() {
 
 func (l *Listener) Stop() {
 	close(l.stop)
-	hook.End()
+	if l.display != nil {
+		C.XFlush(l.display)
+	}
+}
+
+func xEventType(event *C.XEvent) C.int {
+	return *(*C.int)(unsafe.Pointer(event))
 }
