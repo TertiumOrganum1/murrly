@@ -41,6 +41,10 @@ func (t *Transcriber) Close() error {
 // Transcribe runs inference on a mono 16 kHz float32 PCM buffer and returns
 // the recognized text.
 func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
+	if len(pcm) == 0 {
+		return "", nil
+	}
+
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

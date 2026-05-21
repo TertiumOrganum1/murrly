@@ -215,3 +215,41 @@ func TestEmptyTranscriptionSkipsPaste(t *testing.T) {
 		t.Error("OnTranscript should not be called when text is empty")
 	}
 }
+
+func TestEmptyRecordingSkipsTranscriptionAndPaste(t *testing.T) {
+	rec := &fakeRecorder{}
+	tr := &fakeTranscriber{output: "should not be used"}
+	cb := &fakeClipboard{}
+	pa := &fakePaster{}
+	st := &recordedStates{}
+
+	a := New(Config{
+		Recorder:    rec,
+		Transcriber: tr,
+		Clipboard:   cb,
+		Paster:      pa,
+		OnState:     st.Set,
+		PasteDelay:  10 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	events := make(chan Event, 4)
+	go a.Run(ctx, events)
+
+	events <- EventKeyDown
+	time.Sleep(20 * time.Millisecond)
+	events <- EventKeyUp
+	waitUntilIdle(t, st)
+
+	if tr.called {
+		t.Error("transcriber should not be called when recording is empty")
+	}
+	if cb.wasSaved {
+		t.Error("clipboard.Save should not be called when recording is empty")
+	}
+	if pa.pasted {
+		t.Error("paste should not happen when recording is empty")
+	}
+}

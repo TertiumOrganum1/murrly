@@ -103,6 +103,11 @@ func (a *App) finish() {
 		a.setState(StateError)
 		return
 	}
+	if len(pcm) == 0 {
+		log.Printf("recording is empty")
+		a.setState(StateIdle)
+		return
+	}
 	a.setState(StateTranscribing)
 	text, err := a.cfg.Transcriber.Transcribe(pcm)
 	if err != nil {

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"embed"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -137,7 +136,7 @@ func setupLogging() func() {
 		log.Printf("open log %s: %v", path, err)
 		return func() {}
 	}
-	log.SetOutput(io.MultiWriter(os.Stderr, file))
+	log.SetOutput(file)
 	log.Printf("log file: %s", path)
 	return func() {
 		if err := file.Close(); err != nil {

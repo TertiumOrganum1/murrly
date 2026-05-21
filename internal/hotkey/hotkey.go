@@ -19,6 +19,11 @@ static int vi_grab_key(Display* display, Window root, KeySym keysym, unsigned in
 static KeySym vi_keycode_to_keysym(Display* display, unsigned int keycode) {
 	return XkbKeycodeToKeysym(display, (KeyCode)keycode, 0, 0);
 }
+
+static void vi_enable_detectable_autorepeat(Display* display) {
+	Bool supported = False;
+	XkbSetDetectableAutoRepeat(display, True, &supported);
+}
 */
 import "C"
 
@@ -90,6 +95,7 @@ func (l *Listener) Start() {
 		C.XCloseDisplay(display)
 		l.display = nil
 	}()
+	C.vi_enable_detectable_autorepeat(display)
 
 	root := C.XDefaultRootWindow(display)
 	for _, modifiers := range []C.uint{0, C.LockMask, C.Mod2Mask, C.LockMask | C.Mod2Mask} {

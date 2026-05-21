@@ -6,6 +6,8 @@ BIN="${BIN:-$HOME/.local/bin/$APP_ID}"
 LOG_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/voice-input"
 LOG_FILE="$LOG_DIR/voice-input.log"
 
+mkdir -p "$LOG_DIR"
+
 if [[ ! -x "$BIN" ]]; then
 	echo "Binary not found or not executable: $BIN" >&2
 	echo "Run: make install" >&2
@@ -18,9 +20,9 @@ if pgrep -u "$(id -u)" -x "$APP_ID" >/dev/null 2>&1; then
 fi
 
 if command -v setsid >/dev/null 2>&1; then
-	setsid -f "$BIN" >/dev/null 2>&1
+	setsid -f "$BIN" >>"$LOG_FILE" 2>&1
 else
-	nohup "$BIN" >/dev/null 2>&1 &
+	nohup "$BIN" >>"$LOG_FILE" 2>&1 &
 	disown "$!" 2>/dev/null || true
 fi
 
