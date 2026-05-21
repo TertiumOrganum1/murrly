@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 WHISPER_DIR := third_party/whisper.cpp
 WHISPER_BUILD := $(WHISPER_DIR)/build
-BIN := bin/voice-input
+BIN := bin/murrly
 
 INCLUDE_PATH := $(abspath $(WHISPER_DIR)/include):$(abspath $(WHISPER_DIR)/ggml/include)
 LIBRARY_PATH := $(abspath $(WHISPER_BUILD)/src):$(abspath $(WHISPER_BUILD)/ggml/src):$(abspath $(WHISPER_BUILD)/ggml/src/ggml-cpu):$(abspath $(WHISPER_BUILD)/ggml/src/ggml-cuda):/usr/lib/x86_64-linux-gnu
@@ -38,7 +38,7 @@ build: whisper
 	mkdir -p bin
 	C_INCLUDE_PATH="$(INCLUDE_PATH)" \
 	LIBRARY_PATH="$(LIBRARY_PATH)" \
-	go build -ldflags "-extldflags '$(CUDA_LDFLAGS)'" -o $(BIN) ./cmd/voice-input
+	go build -ldflags "-extldflags '$(CUDA_LDFLAGS)'" -o $(BIN) ./cmd/murrly
 
 install: build
 	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" scripts/install-linux-desktop.sh

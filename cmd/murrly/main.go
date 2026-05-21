@@ -9,16 +9,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tertiumorganum1/murrly/internal/app"
-	"github.com/tertiumorganum1/murrly/internal/clipboard"
-	"github.com/tertiumorganum1/murrly/internal/config"
-	"github.com/tertiumorganum1/murrly/internal/hotkey"
-	"github.com/tertiumorganum1/murrly/internal/logfile"
-	"github.com/tertiumorganum1/murrly/internal/paster"
-	"github.com/tertiumorganum1/murrly/internal/recorder"
-	"github.com/tertiumorganum1/murrly/internal/transcriber"
-	"github.com/tertiumorganum1/murrly/internal/transcripthistory"
-	"github.com/tertiumorganum1/murrly/internal/tray"
+	"github.com/tertiumorganum1/voice-input/internal/app"
+	"github.com/tertiumorganum1/voice-input/internal/clipboard"
+	"github.com/tertiumorganum1/voice-input/internal/config"
+	"github.com/tertiumorganum1/voice-input/internal/hotkey"
+	"github.com/tertiumorganum1/voice-input/internal/logfile"
+	"github.com/tertiumorganum1/voice-input/internal/paster"
+	"github.com/tertiumorganum1/voice-input/internal/recorder"
+	"github.com/tertiumorganum1/voice-input/internal/transcriber"
+	"github.com/tertiumorganum1/voice-input/internal/transcripthistory"
+	"github.com/tertiumorganum1/voice-input/internal/tray"
 )
 
 //go:embed assets/icon-idle.png assets/icon-recording.png assets/icon-transcribing.png assets/icon-error.png
