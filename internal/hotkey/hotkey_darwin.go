@@ -1,0 +1,78 @@
+//go:build darwin
+
+// hotkey_darwin.go implements the macOS backend via Carbon RegisterEventHotKey
+// (wrapped by golang.design/x/hotkey). Carbon natively delivers press and
+// release events; no Accessibility permission is required to register the
+// hotkey itself. (Accessibility is still required for paster.Paste which
+// sends Cmd+V via osascript.)
+package hotkey
+
+import (
+	"fmt"
+	"strings"
+
+	gohotkey "golang.design/x/hotkey"
+)
+
+// keyMap is the supported set of keys for push-to-talk on macOS. We keep this
+// short and aligned with the Linux implementation (F1..F15).
+var keyMap = map[string]gohotkey.Key{
+	"f1":  gohotkey.KeyF1,
+	"f2":  gohotkey.KeyF2,
+	"f3":  gohotkey.KeyF3,
+	"f4":  gohotkey.KeyF4,
+	"f5":  gohotkey.KeyF5,
+	"f6":  gohotkey.KeyF6,
+	"f7":  gohotkey.KeyF7,
+	"f8":  gohotkey.KeyF8,
+	"f9":  gohotkey.KeyF9,
+	"f10": gohotkey.KeyF10,
+	"f11": gohotkey.KeyF11,
+	"f12": gohotkey.KeyF12,
+	"f13": gohotkey.KeyF13,
+	"f14": gohotkey.KeyF14,
+	"f15": gohotkey.KeyF15,
+}
+
+type Listener struct {
+	hk     *gohotkey.Hotkey
+	events chan Event
+	stop   chan struct{}
+}
+
+func New(key string) (*Listener, error) {
+	k, ok := keyMap[strings.ToLower(strings.TrimSpace(key))]
+	if !ok {
+		return nil, fmt.Errorf("hotkey: unknown key %q (supported: F1..F15)", key)
+	}
+	return &Listener{
+		hk:     gohotkey.New(nil, k),
+		events: make(chan Event, 8),
+		stop:   make(chan struct{}),
+	}, nil
+}
+
+func (l *Listener) Events() <-chan Event { return l.events }
+
+// Start registers the hotkey and pipes press/release events to Events().
+// Blocks until Stop is called; intended to be run in its own goroutine.
+func (l *Listener) Start() {
+	if err := l.hk.Register(); err != nil {
+		return
+	}
+	for {
+		select {
+		case <-l.stop:
+			_ = l.hk.Unregister()
+			return
+		case <-l.hk.Keydown():
+			l.events <- EventDown
+		case <-l.hk.Keyup():
+			l.events <- EventUp
+		}
+	}
+}
+
+func (l *Listener) Stop() {
+	close(l.stop)
+}

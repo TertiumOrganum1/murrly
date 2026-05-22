@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package hotkey grabs a global push-to-talk key on X11.
+// hotkey.go implements the Linux X11 backend.
 package hotkey
 
 /*
@@ -35,13 +35,6 @@ import (
 	"time"
 
 	"unsafe"
-)
-
-type Event int
-
-const (
-	EventDown Event = iota
-	EventUp
 )
 
 // X11 keysyms for function keys.
