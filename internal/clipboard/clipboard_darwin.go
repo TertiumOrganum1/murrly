@@ -2,44 +2,56 @@
 
 package clipboard
 
+/*
+#cgo darwin LDFLAGS: -framework Cocoa
+
+#include <stdlib.h>
+#include "clipboard_darwin.h"
+*/
+import "C"
+
 import (
 	"fmt"
-	"os/exec"
-	"strings"
+	"unsafe"
 )
 
-// Save reads the macOS pasteboard via pbpaste.
-// macOS has no separate "primary" selection — Primary/HasPrimary stay zero.
+// Save snapshots the entire NSPasteboard via the native API. Every type
+// of every item (text, image, RTF, file URLs, …) is captured into an
+// opaque token carried through Restore — so a copied screenshot survives
+// a transcription paste exactly as it was.
+//
+// macOS has no separate "primary" selection — Primary / HasPrimary stay
+// zero.
 func (c *Clipboard) Save() (Saved, error) {
-	out, err := exec.Command("pbpaste").Output()
-	if err != nil {
-		// pbpaste returns 0 even for empty clipboard; non-zero means something
-		// went wrong. Treat as empty rather than failing the round-trip.
+	token := C.mur_clip_save_state()
+	if token == nil {
 		return Saved{}, nil
 	}
-	text := string(out)
 	return Saved{
-		Text:       text,
-		HasContent: len(text) > 0,
+		HasContent:    true,
+		platformState: uintptr(token),
 	}, nil
 }
 
-// Set writes text to the macOS pasteboard via pbcopy.
+// Set replaces the pasteboard with a single UTF-8 plain text item.
+// Atomic — no torn intermediate state visible to other apps.
 func (c *Clipboard) Set(text string) error {
-	cmd := exec.Command("pbcopy")
-	cmd.Stdin = strings.NewReader(text)
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("pbcopy: %w", err)
+	ctext := C.CString(text)
+	defer C.free(unsafe.Pointer(ctext))
+	if rc := C.mur_clip_write_text(ctext); rc != 0 {
+		return fmt.Errorf("clipboard: NSPasteboard write failed (rc=%d)", int(rc))
 	}
 	return nil
 }
 
-// Restore writes the previously saved text back to the pasteboard.
-// RestorePrimary is a no-op on macOS (no primary selection concept).
+// Restore reinstates the pasteboard from a Save() snapshot. Consumes
+// (frees) the platform-state token. If the snapshot was empty, the
+// pasteboard is cleared. RestorePrimary is a no-op on macOS.
 func (c *Clipboard) Restore(s Saved) error {
-	if s.HasContent {
-		return c.Set(s.Text)
+	if s.platformState == 0 {
+		C.mur_clip_restore_state(nil)
+		return nil
 	}
-	// Clear the pasteboard by writing an empty string.
-	return c.Set("")
+	C.mur_clip_restore_state(unsafe.Pointer(s.platformState))
+	return nil
 }

@@ -32,13 +32,25 @@ $(WHISPER_BUILD)/src/libwhisper.a:
 	cmake --build $(WHISPER_BUILD) --target ggml-metal -j$$(sysctl -n hw.ncpu)
 	cmake --build $(WHISPER_BUILD) --target ggml-blas -j$$(sysctl -n hw.ncpu)
 
-build: whisper
+# Sources that should trigger a rebuild. Go's cgo only tracks .go file
+# mtimes — it ignores .m/.h/.png changes, so we list them explicitly and
+# force `go build` whenever any of them is newer than the binary.
+GO_SOURCES   := $(shell find cmd internal -type f -name '*.go' 2>/dev/null)
+CGO_SOURCES  := $(shell find cmd internal -type f \( -name '*.m' -o -name '*.h' -o -name '*.c' \) 2>/dev/null)
+ASSET_SOURCES := $(shell find cmd/murrly/assets -type f 2>/dev/null)
+ALL_SOURCES  := $(GO_SOURCES) $(CGO_SOURCES) $(ASSET_SOURCES)
+
+build: $(BIN)
+
+$(BIN): $(WHISPER_BUILD)/src/libwhisper.a $(ALL_SOURCES)
 	mkdir -p bin
+	# -a forces re-link so .m/.h changes always picked up, since go-build's
+	# default dependency graph misses non-.go files in the same package.
 	C_INCLUDE_PATH="$(INCLUDE_PATH)" \
 	LIBRARY_PATH="$(LIBRARY_PATH)" \
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS_DARWIN)" \
-	go build -trimpath -buildvcs=false -o $(BIN) ./cmd/murrly
+	go build -trimpath -buildvcs=false -a -o $(BIN) ./cmd/murrly
 
 install: build
 	scripts/install-mac.sh
