@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/tertiumorganum1/murrly/internal/paths"
 )
 
 type Config struct {
@@ -47,7 +48,7 @@ func defaults() Config {
 		Hotkey: HotkeyConfig{Key: "F12", Mode: "push_to_talk"},
 		Audio:  AudioConfig{Device: "", SampleRate: 16000},
 		Whisper: WhisperConfig{
-			ModelPath:     "~/.local/share/murrly/models/ggml-large-v3.bin",
+			ModelPath:     "", // resolved in Load() from paths.ModelsDir() if empty
 			Device:        "cuda",
 			ComputeType:   "float16",
 			Language:      "",
@@ -67,13 +68,21 @@ func Load(path string) (Config, error) {
 		if err := writeDefault(path); err != nil {
 			return Config{}, fmt.Errorf("write default config: %w", err)
 		}
-		expandPaths(&cfg)
-		return cfg, nil
+	} else {
+		if _, err := toml.DecodeFile(path, &cfg); err != nil {
+			return Config{}, fmt.Errorf("decode %s: %w", path, err)
+		}
 	}
 
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
-		return Config{}, fmt.Errorf("decode %s: %w", path, err)
+	// Resolve ModelPath from paths.ModelsDir() if not set in the config.
+	if cfg.Whisper.ModelPath == "" {
+		dir, err := paths.ModelsDir()
+		if err != nil {
+			return Config{}, fmt.Errorf("models dir: %w", err)
+		}
+		cfg.Whisper.ModelPath = filepath.Join(dir, "ggml-large-v3.bin")
 	}
+
 	expandPaths(&cfg)
 	return cfg, nil
 }
@@ -110,11 +119,7 @@ func writeDefault(path string) error {
 	return toml.NewEncoder(f).Encode(defaults())
 }
 
-// DefaultPath returns ~/.config/murrly/config.toml.
+// DefaultPath returns the platform-correct path to murrly's config.toml.
 func DefaultPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "murrly", "config.toml"), nil
+	return paths.ConfigFile()
 }
