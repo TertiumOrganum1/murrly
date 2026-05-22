@@ -1,6 +1,6 @@
-# voice-input
+# Murrly
 
-`voice-input` — локальный push-to-talk ввод текста голосом для Linux.
+Murrly — локальный push-to-talk ввод текста голосом для Linux и macOS (Apple Silicon).
 Удерживаете `F12`, говорите, отпускаете клавишу — распознанный текст
 вставляется в активное окно через буфер обмена.
 
@@ -11,7 +11,8 @@
 
 - глобальная клавиша push-to-talk;
 - распознавание речи через локальную модель Whisper;
-- вставка результата в текущее окно через `xclip` и `xdotool`;
+- вставка результата в текущее окно через `xclip` + `xdotool` (Linux) или
+  `pbcopy` + `osascript Cmd+V` (macOS);
 - иконка и меню в системном трее;
 - копирование последних трех распознанных фрагментов из меню трея;
 - постобработка текста: пробелы после пунктуации, удаление типичных
@@ -21,16 +22,17 @@
 
 ## Ограничения
 
-- рассчитано на Linux/X11;
-- для Wayland может не работать глобальный hotkey, `xclip` или `xdotool`;
-- сборка по умолчанию использует CUDA и NVIDIA GPU;
+- Linux: рассчитано на X11. Для Wayland глобальный hotkey, `xclip` и `xdotool`
+  могут не работать.
+- macOS: требуется Apple Silicon (M1+) и macOS 11+. Intel Mac не проверен.
+- сборка использует CUDA на Linux и Metal на macOS;
 - модель Whisper не хранится в репозитории и скачивается отдельно.
 
 ## Быстрый старт на Debian/Ubuntu
 
 ```bash
-git clone https://github.com/tertiumorganum1/voice-input.git
-cd voice-input
+git clone https://github.com/tertiumorganum1/murrly.git
+cd murrly
 scripts/bootstrap-ubuntu.sh
 ```
 
@@ -39,9 +41,9 @@ scripts/bootstrap-ubuntu.sh
 - ставит системные зависимости через `sudo apt-get`;
 - собирает `whisper.cpp`;
 - скачивает модель `ggml-large-v3.bin`;
-- копирует модель в `~/.local/share/voice-input/models/`;
-- собирает бинарник `bin/voice-input`;
-- устанавливает приложение в `~/.local/bin/voice-input`;
+- копирует модель в `~/.local/share/murrly/models/`;
+- собирает бинарник `bin/murrly`;
+- устанавливает приложение в `~/.local/bin/murrly`;
 - добавляет ярлык в меню приложений.
 
 После установки запустите приложение из меню или командой фонового запуска:
@@ -72,6 +74,85 @@ AUTOSTART=1 scripts/bootstrap-ubuntu.sh
 MODEL=large-v3-turbo scripts/bootstrap-ubuntu.sh
 ```
 
+## Быстрый старт на macOS (Apple Silicon)
+
+```bash
+git clone https://github.com/tertiumorganum1/murrly.git
+cd murrly
+scripts/bootstrap-mac.sh
+```
+
+Скрипт:
+
+- ставит системные зависимости через Homebrew (`brew install cmake portaudio go librsvg`);
+- собирает `whisper.cpp` с Metal-ускорением;
+- скачивает модель `ggml-large-v3.bin`;
+- копирует модель в `~/Library/Application Support/Murrly/models/`;
+- собирает бинарник `bin/murrly`;
+- генерит иконку `build/murrly.icns`;
+- упаковывает `.app` bundle и копирует в `/Applications/Murrly.app` (ad-hoc подпись).
+
+Запуск:
+
+```bash
+open -a Murrly
+```
+
+или через Spotlight (`Cmd+Space`, ввести `Murrly`).
+
+### Первый запуск на macOS
+
+1. **Gatekeeper.** Приложение подписано ad-hoc (не Apple Developer ID), поэтому
+   при первом запуске появится предупреждение "Murrly cannot be opened because
+   it is from an unidentified developer". Кликните по `/Applications/Murrly.app`
+   правой кнопкой → `Open` → `Open` в диалоге. Со второго раза приложение
+   запускается без предупреждений.
+
+2. **Микрофон.** При первом удержании hotkey macOS покажет диалог "Murrly would
+   like to access the microphone". Разрешите. Текст диалога определяется
+   `NSMicrophoneUsageDescription` в Info.plist.
+
+3. **Accessibility.** Для вставки текста через `Cmd+V` нужно разрешение
+   Accessibility. На старте Murrly триггерит системный prompt; если пропустили,
+   откройте `System Settings → Privacy & Security → Accessibility` и включите
+   тумблер для Murrly. После этого перезапустите приложение.
+
+### Hotkey на macOS
+
+По умолчанию `F12` на современных Mac занят медиа-контролом (Volume Up).
+Варианты:
+
+- держать `fn+F12` вместо `F12`;
+- включить `System Settings → Keyboard → Use F1, F2 etc. keys as standard
+  function keys` (тогда `F12` без `fn`);
+- выбрать другую клавишу в конфиге.
+
+Поддерживаются `F1`..`F15`. Конфиг:
+`~/Library/Application Support/Murrly/config.toml`
+
+```toml
+[hotkey]
+key = "F10"
+```
+
+### Автозапуск на macOS
+
+```bash
+make autostart
+```
+
+Под капотом — Login Item, добавляется через `osascript`. Удалить:
+
+```bash
+make uninstall-autostart
+```
+
+### Логи на macOS
+
+```bash
+tail -f ~/Library/Caches/Murrly/murrly.log
+```
+
 ## Ручная сборка
 
 ```bash
@@ -80,7 +161,10 @@ make model
 make build
 ```
 
-Установка бинарника, ярлыка приложения и локально скачанных моделей:
+`Makefile` определяет ОС через `uname -s` и подключает `mk/linux.mk` или
+`mk/darwin.mk` соответственно.
+
+Установка бинарника, ярлыка приложения и локально скачанных моделей (Linux):
 
 ```bash
 make install
@@ -89,22 +173,24 @@ make install
 Если была установлена старая версия как user-service, `make install` отключит
 ее и уберет старый unit-файл.
 
-После установки запустите `voice-input` из меню приложений или командой
-фонового запуска:
+На macOS — то же самое, но собирает и устанавливает `.app` bundle:
+
+```bash
+make install
+```
+
+### Запуск (Linux)
 
 ```bash
 make start
 ```
 
 `make start` не привязывает процесс к текущему терминалу. Если закрыть консоль,
-`voice-input` продолжит работать, пока вы не закроете его через меню в трее.
+`murrly` продолжит работать, пока вы не закроете его через меню в трее.
 
 Приложение работает как обычный tray-app. В трее есть меню, через которое его
-можно закрыть.
-
-В меню трея также есть пункты для копирования последних трех распознанных
-фрагментов в буфер обмена. Это помогает, если текст распознался, но не вставился
-в нужное окно.
+можно закрыть. Там же — пункты для копирования последних трех распознанных
+фрагментов в буфер обмена.
 
 Автозапуск:
 
@@ -118,29 +204,20 @@ make autostart
 make uninstall-autostart
 ```
 
-Лог приложения:
+Лог приложения (Linux):
 
 ```text
-~/.cache/voice-input/voice-input.log
+~/.cache/murrly/murrly.log
 ```
 
-Лог ротируется по 5 MiB, хранится до 5 backup-файлов:
-
-```text
-voice-input.log
-voice-input.log.1
-voice-input.log.2
-...
-voice-input.log.5
-```
+Лог ротируется по 5 MiB, хранится до 5 backup-файлов.
 
 ## Конфигурация
 
 При первом запуске создается файл:
 
-```text
-~/.config/voice-input/config.toml
-```
+- Linux: `~/.config/murrly/config.toml`
+- macOS: `~/Library/Application Support/Murrly/config.toml`
 
 Пример:
 
@@ -154,7 +231,7 @@ device = ""
 sample_rate = 16000
 
 [whisper]
-model_path = "~/.local/share/voice-input/models/ggml-large-v3.bin"
+model_path = ""  # пустая строка = дефолт (см. ниже)
 language = ""
 beam_size = 5
 initial_prompt = """
@@ -167,34 +244,54 @@ paste_delay_ms = 80
 restore_primary = true
 ```
 
+`model_path = ""` — Murrly резолвит путь автоматически:
+- Linux: `~/.local/share/murrly/models/ggml-large-v3.bin`
+- macOS: `~/Library/Application Support/Murrly/models/ggml-large-v3.bin`
+
 `language = ""` означает автоопределение языка. Для русской речи можно оставить
 автоопределение или явно указать `language = "ru"`.
 
 После изменения конфига закройте приложение через меню в трее и запустите его
 заново.
 
-## Отладочный запуск
-
-Закройте уже запущенное приложение через меню в трее и запустите бинарник из
-терминала:
+## Миграция с прежней версии `voice-input` на Linux
 
 ```bash
-~/.local/bin/voice-input
+mv ~/.local/share/voice-input ~/.local/share/murrly
+mv ~/.config/voice-input ~/.config/murrly
+rm ~/.config/murrly/config.toml      # пересоздастся с актуальными путями
+rm -f ~/.local/bin/voice-input ~/.config/autostart/voice-input.desktop
+```
+
+`config.toml` удаляется потому, что внутри был absolute `model_path` указывающий
+на старую папку `~/.local/share/voice-input/...`. После удаления приложение
+создаст дефолтный конфиг с правильным путём. Свои настройки (hotkey, language,
+initial_prompt) скопируйте вручную из бэкапа.
+
+Затем переустановите как обычно.
+
+## Отладочный запуск
+
+Закройте уже запущенное приложение через меню в трее и запустите бинарник
+напрямую:
+
+```bash
+# Linux
+~/.local/bin/murrly
+# macOS — внутри .app
+/Applications/Murrly.app/Contents/MacOS/murrly
+# или прямо из репо после make build
+./bin/murrly
 ```
 
 В терминале будет видно итоговый распознанный текст и ошибки.
-
-Лог приложения:
-
-```bash
-tail -f ~/.cache/voice-input/voice-input.log
-```
 
 ## Файлы, которые не входят в репозиторий
 
 В репозитории не хранятся:
 
 - бинарники сборки (`bin/`);
+- сгенерированные иконки и `.icns` (`build/`);
 - исходники и build-directory `whisper.cpp` (`third_party/`);
 - модели Whisper (`models/`);
 - локальные конфиги и `.env` файлы.
