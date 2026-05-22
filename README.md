@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icons/app/icon_512x512.png" width="256" alt="Murrly">
+</p>
+
 # Murrly
 
 Murrly — локальный push-to-talk ввод текста голосом для Linux и macOS (Apple Silicon).
