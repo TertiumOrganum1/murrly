@@ -77,7 +77,9 @@ func (t *Tray) SetRecentTranscripts(items []string) {
 }
 
 func (t *Tray) onReady() {
-	systray.SetTitle("Murrly")
+	// No SetTitle — the cat icon alone is the brand mark. A text label
+	// next to it just eats menu-bar real estate (especially on M-series
+	// macs where every pixel before the notch counts).
 	systray.SetTooltip("Murrly: idle")
 	if icon, ok := t.icons[StateIdle]; ok {
 		systray.SetIcon(icon)
