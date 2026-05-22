@@ -2,12 +2,12 @@
 package tray
 
 import (
-	"os"
-	"os/exec"
 	"strings"
 	"unicode/utf8"
 
 	"fyne.io/systray"
+
+	"github.com/tertiumorganum1/murrly/internal/menuactions"
 )
 
 type State int
@@ -19,36 +19,21 @@ const (
 	StateError
 )
 
-type Actions struct {
-	OnPauseToggle     func()
-	OnReload          func()
-	OnOpenConfig      func()
-	OnCopyTranscript  func(index int)
-	OnToggleAutostart func() bool // returns the new state after toggling
-	IsAutostartOn     func() bool
-	OnPickModel       func(index int)
-	ModelLabels       []string
-	ActiveModelIndex  int // -1 if none active
-	OnQuit            func()
-}
-
 type Tray struct {
 	icons         map[State][]byte
 	stateCh       chan State
 	transcriptCh  chan []string
 	activeModelCh chan int
-	actions       Actions
-	configPath    string
+	actions       *menuactions.Actions
 }
 
-func New(icons map[State][]byte, configPath string, actions Actions) *Tray {
+func New(icons map[State][]byte, actions *menuactions.Actions) *Tray {
 	return &Tray{
 		icons:         icons,
 		stateCh:       make(chan State, 8),
 		transcriptCh:  make(chan []string, 8),
 		activeModelCh: make(chan int, 8),
 		actions:       actions,
-		configPath:    configPath,
 	}
 }
 
@@ -97,10 +82,8 @@ func (t *Tray) onReady() {
 		systray.SetIcon(icon)
 	}
 
-	pauseItem := systray.AddMenuItem("Пауза", "Приостановить слушать hotkey")
-	reloadItem := systray.AddMenuItem("Перезагрузить конфиг", "Перечитать config.toml")
-	openCfgItem := systray.AddMenuItem("Открыть конфиг", "Открыть config.toml")
-	systray.AddSeparator()
+	// Transcript slots first — by far the most common reason to open the
+	// menu is to recopy a recent recognition, so it lives at the top.
 	copyLatestItem := systray.AddMenuItem("— (последнее)", "Скопировать в буфер обмена")
 	copyPreviousItem := systray.AddMenuItem("— (предыдущее)", "Скопировать в буфер обмена")
 	copyOlderItem := systray.AddMenuItem("— (ещё раньше)", "Скопировать в буфер обмена")
@@ -109,11 +92,13 @@ func (t *Tray) onReady() {
 		item.SetTitle(transcriptMenuTitle(i, ""))
 		item.Disable()
 	}
-	// Hide the model picker if fewer than 2 models are available —
+
+	systray.AddSeparator()
+
+	// Hide the model picker when fewer than 2 models are available —
 	// there's nothing to pick between.
 	var modelItems []*systray.MenuItem
 	if len(t.actions.ModelLabels) >= 2 {
-		systray.AddSeparator()
 		// AddSubMenuItemCheckbox is required on Linux: AddSubMenuItem
 		// creates items with toggle-type="" in dbusmenu, which
 		// Cinnamon/AppIndicator renders without their label. The
@@ -127,13 +112,33 @@ func (t *Tray) onReady() {
 			modelItems[i] = modelHeader.AddSubMenuItemCheckbox(lbl, "", checked)
 		}
 	}
+
 	autostartChecked := t.actions.IsAutostartOn != nil && t.actions.IsAutostartOn()
 	autostartItem := systray.AddMenuItemCheckbox("Запускать при логине", "Стартовать Murrly автоматически при входе в систему", autostartChecked)
+
+	reloadItem := systray.AddMenuItem("Перезагрузить конфиг", "Перечитать config.toml")
+	openCfgItem := systray.AddMenuItem("Открыть конфиг", "Открыть config.toml")
+
+	// Permissions submenu — surfaces TCC privacy panes that the brief
+	// AXIsProcessTrustedWithOptions toast otherwise hides before the
+	// user can act. Skipped when no permission callbacks are wired
+	// (Linux, where TCC doesn't apply).
+	var micPermItem, axPermItem *systray.MenuItem
+	if t.actions.OnOpenMicSettings != nil || t.actions.OnOpenAccessibility != nil {
+		permHeader := systray.AddMenuItem("Разрешения", "Открыть системные настройки приватности")
+		if t.actions.OnOpenMicSettings != nil {
+			micPermItem = permHeader.AddSubMenuItem("Микрофон", "Privacy → Microphone")
+		}
+		if t.actions.OnOpenAccessibility != nil {
+			axPermItem = permHeader.AddSubMenuItem("Accessibility", "Privacy → Accessibility")
+		}
+	}
+
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Завершить Murrly", "Закрыть Murrly")
 
-	// systray's API gives one ClickedCh per item; rather than expand the
-	// main select, fan model-pick clicks out from a per-item goroutine.
+	// systray's API gives one ClickedCh per item; rather than blow up
+	// the main select, fan submenu-item clicks out to per-item goroutines.
 	for i, item := range modelItems {
 		idx := i
 		mi := item
@@ -141,6 +146,26 @@ func (t *Tray) onReady() {
 			for range mi.ClickedCh {
 				if t.actions.OnPickModel != nil {
 					t.actions.OnPickModel(idx)
+				}
+			}
+		}()
+	}
+	if micPermItem != nil {
+		mi := micPermItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnOpenMicSettings != nil {
+					t.actions.OnOpenMicSettings()
+				}
+			}
+		}()
+	}
+	if axPermItem != nil {
+		mi := axPermItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnOpenAccessibility != nil {
+					t.actions.OnOpenAccessibility()
 				}
 			}
 		}()
@@ -164,16 +189,14 @@ func (t *Tray) onReady() {
 						item.Uncheck()
 					}
 				}
-			case <-pauseItem.ClickedCh:
-				if t.actions.OnPauseToggle != nil {
-					t.actions.OnPauseToggle()
-				}
 			case <-reloadItem.ClickedCh:
-				if t.actions.OnReload != nil {
-					t.actions.OnReload()
+				if t.actions.OnReloadConfig != nil {
+					t.actions.OnReloadConfig()
 				}
 			case <-openCfgItem.ClickedCh:
-				openInEditor(t.configPath)
+				if t.actions.OnOpenConfig != nil {
+					t.actions.OnOpenConfig()
+				}
 			case <-copyLatestItem.ClickedCh:
 				t.copyTranscript(0)
 			case <-copyPreviousItem.ClickedCh:
@@ -259,18 +282,4 @@ func transcriptPreview(text string, limit int) string {
 	}
 	runes := []rune(compact)
 	return string(runes[:limit]) + "..."
-}
-
-func openInEditor(path string) {
-	editor := os.Getenv("VISUAL")
-	if editor == "" {
-		editor = os.Getenv("EDITOR")
-	}
-	var cmd *exec.Cmd
-	if editor != "" {
-		cmd = exec.Command(editor, path)
-	} else {
-		cmd = exec.Command("xdg-open", path)
-	}
-	_ = cmd.Start()
 }

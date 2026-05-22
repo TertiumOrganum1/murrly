@@ -74,6 +74,40 @@ func (l *transcriberLoader) Reload(modelName string) error {
 	return nil
 }
 
+// ReloadConfig re-reads config.toml from disk and rebuilds the
+// Transcriber with the new Whisper settings (model, beam_size, language,
+// initial_prompt). Lets the user tune Whisper parameters live, without
+// restarting the app. Hotkey, audio device, and paste delay are wired
+// into other subsystems at startup — those still need a full restart.
+func (l *transcriberLoader) ReloadConfig(cfgPath string) error {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+
+	newTr, err := transcriber.New(transcriber.Config{
+		ModelPath:     cfg.Whisper.ModelPath,
+		Language:      cfg.Whisper.Language,
+		BeamSize:      cfg.Whisper.BeamSize,
+		Adaptive:      cfg.Whisper.Adaptive,
+		InitialPrompt: cfg.Whisper.InitialPrompt,
+	})
+	if err != nil {
+		return fmt.Errorf("rebuild transcriber: %w", err)
+	}
+
+	l.mu.Lock()
+	old := l.tr
+	l.tr = newTr
+	l.cfg = cfg.Whisper
+	l.mu.Unlock()
+
+	_ = old.Close()
+	log.Printf("transcriber: config reloaded (model=%s beam=%d lang=%q)",
+		cfg.Whisper.Model, cfg.Whisper.BeamSize, cfg.Whisper.Language)
+	return nil
+}
+
 // persistModelChoice writes the new model name into config.toml so the
 // choice survives a restart. Reuses the whole config struct so we don't
 // drop other user-edited values.

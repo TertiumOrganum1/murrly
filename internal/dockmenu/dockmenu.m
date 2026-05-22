@@ -17,6 +17,9 @@ typedef void (*mur_void_cb)(void);
     mur_int_cb cbPickModel;
     mur_void_cb cbToggleAutostart;
     mur_void_cb cbOpenConfig;
+    mur_void_cb cbReloadConfig;
+    mur_void_cb cbOpenMicSettings;
+    mur_void_cb cbOpenAccessibility;
     mur_void_cb cbQuit;
 }
 - (NSMenu*)applicationDockMenu:(NSApplication*)sender;
@@ -26,6 +29,9 @@ typedef void (*mur_void_cb)(void);
 - (void)didPickModel:(id)sender;
 - (void)didPickAutostart:(id)sender;
 - (void)didPickOpenConfig:(id)sender;
+- (void)didPickReloadConfig:(id)sender;
+- (void)didPickOpenMicSettings:(id)sender;
+- (void)didPickOpenAccessibility:(id)sender;
 - (void)didPickQuit:(id)sender;
 @end
 
@@ -53,6 +59,9 @@ typedef void (*mur_void_cb)(void);
 }
 - (void)didPickAutostart:(id)sender { if (cbToggleAutostart) cbToggleAutostart(); }
 - (void)didPickOpenConfig:(id)sender { if (cbOpenConfig) cbOpenConfig(); }
+- (void)didPickReloadConfig:(id)sender { if (cbReloadConfig) cbReloadConfig(); }
+- (void)didPickOpenMicSettings:(id)sender { if (cbOpenMicSettings) cbOpenMicSettings(); }
+- (void)didPickOpenAccessibility:(id)sender { if (cbOpenAccessibility) cbOpenAccessibility(); }
 - (void)didPickQuit:(id)sender { if (cbQuit) cbQuit(); }
 
 @end
@@ -74,6 +83,9 @@ void mur_dockmenu_install(
     void (*onPickModel)(int index),
     void (*onToggleAutostart)(void),
     void (*onOpenConfig)(void),
+    void (*onReloadConfig)(void),
+    void (*onOpenMicSettings)(void),
+    void (*onOpenAccessibility)(void),
     void (*onQuit)(void),
     const char* const* modelLabels,
     int modelCount
@@ -93,6 +105,9 @@ void mur_dockmenu_install(
         gMurDelegate->cbPickModel = onPickModel;
         gMurDelegate->cbToggleAutostart = onToggleAutostart;
         gMurDelegate->cbOpenConfig = onOpenConfig;
+        gMurDelegate->cbReloadConfig = onReloadConfig;
+        gMurDelegate->cbOpenMicSettings = onOpenMicSettings;
+        gMurDelegate->cbOpenAccessibility = onOpenAccessibility;
         gMurDelegate->cbQuit = onQuit;
         gMurDelegate->originalDelegate = [NSApp delegate];
         gMurDelegate->modelItems = [NSMutableArray array];
@@ -148,12 +163,43 @@ void mur_dockmenu_install(
         [menu addItem:autoItem];
         gMurDelegate->autostartItem = autoItem;
 
+        NSMenuItem* reloadItem = [[NSMenuItem alloc]
+            initWithTitle:@"Перезагрузить конфиг"
+            action:@selector(didPickReloadConfig:)
+            keyEquivalent:@""];
+        [reloadItem setTarget:gMurDelegate];
+        [menu addItem:reloadItem];
+
         NSMenuItem* openItem = [[NSMenuItem alloc]
             initWithTitle:@"Открыть конфиг"
             action:@selector(didPickOpenConfig:)
             keyEquivalent:@""];
         [openItem setTarget:gMurDelegate];
         [menu addItem:openItem];
+
+        // Permissions submenu — surfaces TCC privacy panes because the
+        // brief AXIsProcessTrustedWithOptions toast otherwise vanishes
+        // before the user can click "Open System Settings".
+        NSMenuItem* permHeader = [[NSMenuItem alloc]
+            initWithTitle:@"Разрешения"
+            action:NULL
+            keyEquivalent:@""];
+        NSMenu* permSubmenu = [[NSMenu alloc] init];
+        [permSubmenu setAutoenablesItems:NO];
+        NSMenuItem* micItem = [[NSMenuItem alloc]
+            initWithTitle:@"Микрофон"
+            action:@selector(didPickOpenMicSettings:)
+            keyEquivalent:@""];
+        [micItem setTarget:gMurDelegate];
+        [permSubmenu addItem:micItem];
+        NSMenuItem* axItem = [[NSMenuItem alloc]
+            initWithTitle:@"Accessibility"
+            action:@selector(didPickOpenAccessibility:)
+            keyEquivalent:@""];
+        [axItem setTarget:gMurDelegate];
+        [permSubmenu addItem:axItem];
+        [permHeader setSubmenu:permSubmenu];
+        [menu addItem:permHeader];
 
         [menu addItem:[NSMenuItem separatorItem]];
 

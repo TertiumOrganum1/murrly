@@ -13,6 +13,9 @@ extern void murGoCopy(int index);
 extern void murGoPickModel(int index);
 extern void murGoToggleAutostart(void);
 extern void murGoOpenConfig(void);
+extern void murGoReloadConfig(void);
+extern void murGoOpenMicSettings(void);
+extern void murGoOpenAccessibility(void);
 extern void murGoQuit(void);
 */
 import "C"
@@ -20,35 +23,26 @@ import "C"
 import (
 	"sync"
 	"unsafe"
+
+	"github.com/tertiumorganum1/murrly/internal/menuactions"
 )
 
 var (
-	cbMu              sync.Mutex
-	cbCopy            func(int)
-	cbPickModel       func(int)
-	cbToggleAutostart func()
-	cbOpenConfig      func()
-	cbQuit            func()
+	actionsMu sync.RWMutex
+	actions   *menuactions.Actions
 )
 
-// Install registers callbacks for the Dock menu actions and seeds the
-// Model submenu with the provided labels.
-func Install(
-	onCopy func(int),
-	onPickModel func(int),
-	onToggleAutostart, onOpenConfig, onQuit func(),
-	modelLabels []string,
-) {
-	cbMu.Lock()
-	cbCopy = onCopy
-	cbPickModel = onPickModel
-	cbToggleAutostart = onToggleAutostart
-	cbOpenConfig = onOpenConfig
-	cbQuit = onQuit
-	cbMu.Unlock()
+// Install registers the menu actions and seeds the Model submenu with
+// the labels provided in actions.ModelLabels. Safe to call once at app
+// startup; the underlying NSApplicationDelegate chain is set up on the
+// main thread asynchronously.
+func Install(a *menuactions.Actions) {
+	actionsMu.Lock()
+	actions = a
+	actionsMu.Unlock()
 
-	cLabels := make([]*C.char, len(modelLabels))
-	for i, s := range modelLabels {
+	cLabels := make([]*C.char, len(a.ModelLabels))
+	for i, s := range a.ModelLabels {
 		cLabels[i] = C.CString(s)
 	}
 	defer func() {
@@ -66,6 +60,9 @@ func Install(
 		(*[0]byte)(C.murGoPickModel),
 		(*[0]byte)(C.murGoToggleAutostart),
 		(*[0]byte)(C.murGoOpenConfig),
+		(*[0]byte)(C.murGoReloadConfig),
+		(*[0]byte)(C.murGoOpenMicSettings),
+		(*[0]byte)(C.murGoOpenAccessibility),
 		(*[0]byte)(C.murGoQuit),
 		labelsPtr,
 		C.int(len(cLabels)),
@@ -91,57 +88,79 @@ func SetAutostart(enabled bool) {
 }
 
 // SetActiveModel marks the model at the given index (matching the order
-// passed to Install) with a checkmark, clearing others. Pass -1 to clear.
+// passed in Actions.ModelLabels) with a checkmark, clearing others.
+// Pass -1 to clear all.
 func SetActiveModel(index int) {
 	C.mur_dockmenu_set_model_index(C.int(index))
 }
 
+// loadActions is the read-side companion to the Install snapshot, used
+// by every //export callback. RWMutex keeps callbacks lock-free for
+// readers (Install only runs once at startup anyway).
+func loadActions() *menuactions.Actions {
+	actionsMu.RLock()
+	a := actions
+	actionsMu.RUnlock()
+	return a
+}
+
 //export murGoCopy
 func murGoCopy(index C.int) {
-	cbMu.Lock()
-	cb := cbCopy
-	cbMu.Unlock()
-	if cb != nil {
-		cb(int(index))
+	if a := loadActions(); a != nil && a.OnCopyTranscript != nil {
+		a.OnCopyTranscript(int(index))
 	}
 }
 
 //export murGoPickModel
 func murGoPickModel(index C.int) {
-	cbMu.Lock()
-	cb := cbPickModel
-	cbMu.Unlock()
-	if cb != nil {
-		cb(int(index))
+	if a := loadActions(); a != nil && a.OnPickModel != nil {
+		a.OnPickModel(int(index))
 	}
 }
 
 //export murGoToggleAutostart
 func murGoToggleAutostart() {
-	cbMu.Lock()
-	cb := cbToggleAutostart
-	cbMu.Unlock()
-	if cb != nil {
-		cb()
+	a := loadActions()
+	if a == nil || a.OnToggleAutostart == nil {
+		return
 	}
+	// Tray sets its own checkmark from the return value; the dock menu
+	// pulls state via mur_dockmenu_set_autostart from the caller (main
+	// wires this side after the toggle returns).
+	a.OnToggleAutostart()
 }
 
 //export murGoOpenConfig
 func murGoOpenConfig() {
-	cbMu.Lock()
-	cb := cbOpenConfig
-	cbMu.Unlock()
-	if cb != nil {
-		cb()
+	if a := loadActions(); a != nil && a.OnOpenConfig != nil {
+		a.OnOpenConfig()
+	}
+}
+
+//export murGoReloadConfig
+func murGoReloadConfig() {
+	if a := loadActions(); a != nil && a.OnReloadConfig != nil {
+		a.OnReloadConfig()
+	}
+}
+
+//export murGoOpenMicSettings
+func murGoOpenMicSettings() {
+	if a := loadActions(); a != nil && a.OnOpenMicSettings != nil {
+		a.OnOpenMicSettings()
+	}
+}
+
+//export murGoOpenAccessibility
+func murGoOpenAccessibility() {
+	if a := loadActions(); a != nil && a.OnOpenAccessibility != nil {
+		a.OnOpenAccessibility()
 	}
 }
 
 //export murGoQuit
 func murGoQuit() {
-	cbMu.Lock()
-	cb := cbQuit
-	cbMu.Unlock()
-	if cb != nil {
-		cb()
+	if a := loadActions(); a != nil && a.OnQuit != nil {
+		a.OnQuit()
 	}
 }

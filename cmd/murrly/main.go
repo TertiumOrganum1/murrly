@@ -19,6 +19,7 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
 	"github.com/tertiumorganum1/murrly/internal/logfile"
 	"github.com/tertiumorganum1/murrly/internal/macospermissions"
+	"github.com/tertiumorganum1/murrly/internal/menuactions"
 	"github.com/tertiumorganum1/murrly/internal/modelinfo"
 	"github.com/tertiumorganum1/murrly/internal/overlay"
 	"github.com/tertiumorganum1/murrly/internal/paster"
@@ -52,11 +53,21 @@ func main() {
 	if !macospermissions.EnsureAccessibility() {
 		log.Printf("accessibility: not granted yet — paste will not work until you enable Murrly in System Settings → Privacy & Security → Accessibility")
 	}
-
 	if err := recorder.InitPortAudio(); err != nil {
 		log.Fatalf("portaudio: %v", err)
 	}
 	defer recorder.TerminatePortAudio()
+
+	// Surface the mic permission prompt right at startup by momentarily
+	// opening (and immediately closing) a default input stream. Only
+	// stream.Start() reliably triggers the macOS TCC dialog — bare
+	// AudioUnitInitialize or AVCaptureDevice.requestAccess can both be
+	// silent in this app shape, so we go through the same PortAudio
+	// path the real record code uses. On Linux this is a harmless
+	// noop-ish open/close.
+	if err := recorder.Probe(); err != nil {
+		log.Printf("mic probe: %v", err)
+	}
 
 	tr, err := transcriber.New(transcriber.Config{
 		ModelPath:     cfg.Whisper.ModelPath,
@@ -91,7 +102,7 @@ func main() {
 	presentModelNames, presentModelLabels := presentModels()
 
 	var t *tray.Tray
-	t = tray.New(icons, cfgPath, tray.Actions{
+	actions := &menuactions.Actions{
 		OnCopyTranscript: func(index int) {
 			text, ok := history.Get(index)
 			if !ok {
@@ -101,23 +112,6 @@ func main() {
 				log.Printf("copy transcript %d: %v", index, err)
 			}
 		},
-		IsAutostartOn: autostart.Enabled,
-		OnToggleAutostart: func() bool {
-			if autostart.Enabled() {
-				if err := autostart.Disable(); err != nil {
-					log.Printf("autostart disable: %v", err)
-				}
-			} else {
-				if err := autostart.Enable(); err != nil {
-					log.Printf("autostart enable: %v", err)
-				}
-			}
-			newState := autostart.Enabled()
-			dockmenu.SetAutostart(newState) // keep dock menu in sync
-			return newState
-		},
-		ModelLabels:      presentModelLabels,
-		ActiveModelIndex: indexOf(presentModelNames, cfg.Whisper.Model),
 		OnPickModel: func(index int) {
 			if index < 0 || index >= len(presentModelNames) {
 				return
@@ -133,8 +127,52 @@ func main() {
 			dockmenu.SetActiveModel(index)
 			t.SetActiveModel(index)
 		},
-		OnQuit: cancel,
-	})
+		ModelLabels:      presentModelLabels,
+		ActiveModelIndex: indexOf(presentModelNames, cfg.Whisper.Model),
+		OnReloadConfig: func() {
+			if err := loader.ReloadConfig(cfgPath); err != nil {
+				log.Printf("reload config: %v", err)
+			}
+		},
+		OnOpenConfig: func() { openConfigFile(cfgPath) },
+		IsAutostartOn: autostart.Enabled,
+		OnToggleAutostart: func() bool {
+			if autostart.Enabled() {
+				if err := autostart.Disable(); err != nil {
+					log.Printf("autostart disable: %v", err)
+				}
+			} else {
+				if err := autostart.Enable(); err != nil {
+					log.Printf("autostart enable: %v", err)
+				}
+			}
+			newState := autostart.Enabled()
+			// Tray uses the return value to update its own checkmark; the
+			// dock menu has its own NSMenuItem state, sync it here.
+			dockmenu.SetAutostart(newState)
+			return newState
+		},
+		OnQuit: func() { cancel(); t.Quit() },
+	}
+	if privacyPanesSupported() {
+		actions.OnOpenMicSettings = func() {
+			// When the user has not yet answered the prompt, the right
+			// UX is to *show the prompt*, not bounce them to Settings
+			// where Murrly doesn't even appear in the list yet. Once a
+			// decision exists (granted or denied), the prompt won't
+			// reappear, and Settings is the only place to flip it —
+			// fall through there.
+			if macospermissions.MicrophoneAuthStatus() == 0 {
+				if err := recorder.Probe(); err != nil {
+					log.Printf("mic probe: %v", err)
+				}
+				return
+			}
+			openPrivacyPane("Microphone")
+		}
+		actions.OnOpenAccessibility = func() { openPrivacyPane("Accessibility") }
+	}
+	t = tray.New(icons, actions)
 
 	a := app.New(app.Config{
 		Recorder:    recorder.New(),
@@ -188,49 +226,11 @@ func main() {
 
 	go a.Run(ctx, events)
 
-	// Dock right-click menu — same actions as the tray menu but reachable
-	// even when the tray icon is hidden behind the notch.
-	dockmenu.Install(
-		func(index int) {
-			text, ok := history.Get(index)
-			if !ok {
-				return
-			}
-			if err := cb.Set(text); err != nil {
-				log.Printf("dock copy transcript %d: %v", index, err)
-			}
-		},
-		func(index int) {
-			if index < 0 || index >= len(presentModelNames) {
-				return
-			}
-			name := presentModelNames[index]
-			if err := loader.Reload(name); err != nil {
-				log.Printf("dock model pick: %v", err)
-				return
-			}
-			if err := persistModelChoice(cfgPath, cfg, name); err != nil {
-				log.Printf("dock model pick: persist: %v", err)
-			}
-			dockmenu.SetActiveModel(index)
-			t.SetActiveModel(index)
-		},
-		func() {
-			if autostart.Enabled() {
-				if err := autostart.Disable(); err != nil {
-					log.Printf("autostart disable: %v", err)
-				}
-			} else {
-				if err := autostart.Enable(); err != nil {
-					log.Printf("autostart enable: %v", err)
-				}
-			}
-			dockmenu.SetAutostart(autostart.Enabled())
-		},
-		func() { openConfigFile(cfgPath) },
-		func() { cancel(); t.Quit() },
-		presentModelLabels,
-	)
+	// Dock right-click menu (macOS only) — same Actions as the tray, so
+	// "Открыть конфиг" or "Перезагрузить конфиг" do the same thing
+	// regardless of which menu the user opens. On Linux dockmenu.Install
+	// is a no-op.
+	dockmenu.Install(actions)
 	// Reflect current state in the menus on startup.
 	dockmenu.SetAutostart(autostart.Enabled())
 	dockmenu.SetActiveModel(indexOf(presentModelNames, cfg.Whisper.Model))

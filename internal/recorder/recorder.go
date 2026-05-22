@@ -27,6 +27,34 @@ func New() *Recorder { return &Recorder{} }
 func InitPortAudio() error      { return portaudio.Initialize() }
 func TerminatePortAudio() error { return portaudio.Terminate() }
 
+// Probe momentarily opens and closes a default input stream. On macOS,
+// this is what surfaces the standard microphone permission prompt and
+// registers the app under System Settings → Privacy → Microphone —
+// without it, the prompt only appears the first time the user actually
+// holds the push-to-talk hotkey, and the Privacy pane has no row for
+// the app to toggle until then.
+//
+// Cheap and idempotent: after the user has granted (or denied) the
+// permission, subsequent calls just open and close the stream without
+// further prompts. Errors are returned for the caller to log but are
+// not fatal — Denied or device-busy here is fine, the actual record
+// path will surface them again at F12 time.
+func Probe() error {
+	// 1024-frame buffer is what Recorder.Start uses; reusing it keeps
+	// the CoreAudio AUHAL config identical to the real-record path so
+	// macOS sees this as the same client.
+	frame := make([]float32, 1024)
+	stream, err := portaudio.OpenDefaultStream(1, 0, sampleRate, len(frame), frame)
+	if err != nil {
+		return fmt.Errorf("probe open: %w", err)
+	}
+	defer stream.Close()
+	if err := stream.Start(); err != nil {
+		return fmt.Errorf("probe start: %w", err)
+	}
+	return stream.Stop()
+}
+
 func (r *Recorder) Start() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

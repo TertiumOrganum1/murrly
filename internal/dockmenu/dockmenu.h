@@ -3,9 +3,11 @@
 
 // Install builds the Dock right-click menu:
 //   * Copy-transcript slots (indices 0..2 = latest, previous, older)
+//   * Reload Config
+//   * Open Config
 //   * Model submenu (modelLabels[N], picked by index)
 //   * Autostart toggle
-//   * Open Config
+//   * Permissions submenu (Microphone / Accessibility — open System Settings)
 //   * Quit
 //
 // modelLabels is a NULL-terminated array of UTF-8 C strings. modelCount
@@ -15,6 +17,9 @@ void mur_dockmenu_install(
     void (*onPickModel)(int index),
     void (*onToggleAutostart)(void),
     void (*onOpenConfig)(void),
+    void (*onReloadConfig)(void),
+    void (*onOpenMicSettings)(void),
+    void (*onOpenAccessibility)(void),
     void (*onQuit)(void),
     const char* const* modelLabels,
     int modelCount
