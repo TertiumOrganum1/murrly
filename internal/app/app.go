@@ -1,4 +1,4 @@
-// Package app contains the state machine wiring all voice-input components.
+// Package app contains the state machine wiring all murrly components.
 package app
 
 import (

@@ -21,7 +21,7 @@ func main() {
 		{"icon-transcribing.png", color.RGBA{220, 180, 40, 255}},
 		{"icon-error.png", color.RGBA{180, 30, 30, 255}},
 	}
-	const outDir = "cmd/voice-input/assets"
+	const outDir = "cmd/murrly/assets"
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		log.Fatal(err)
 	}

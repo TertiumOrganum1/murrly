@@ -72,8 +72,8 @@ func (t *Tray) SetRecentTranscripts(items []string) {
 }
 
 func (t *Tray) onReady() {
-	systray.SetTitle("voice-input")
-	systray.SetTooltip("voice-input: idle")
+	systray.SetTitle("Murrly")
+	systray.SetTooltip("Murrly: idle")
 	if icon, ok := t.icons[StateIdle]; ok {
 		systray.SetIcon(icon)
 	}
@@ -91,7 +91,7 @@ func (t *Tray) onReady() {
 		item.Disable()
 	}
 	systray.AddSeparator()
-	quitItem := systray.AddMenuItem("Quit", "Stop voice-input")
+	quitItem := systray.AddMenuItem("Quit", "Stop Murrly")
 
 	go func() {
 		for {
@@ -100,7 +100,7 @@ func (t *Tray) onReady() {
 				if icon, ok := t.icons[s]; ok {
 					systray.SetIcon(icon)
 				}
-				systray.SetTooltip("voice-input: " + stateName(s))
+				systray.SetTooltip("Murrly: " + stateName(s))
 			case items := <-t.transcriptCh:
 				updateTranscriptMenuItems(copyItems, items)
 			case <-pauseItem.ClickedCh:

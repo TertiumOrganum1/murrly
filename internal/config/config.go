@@ -1,4 +1,4 @@
-// Package config loads and validates the voice-input TOML configuration.
+// Package config loads and validates the murrly TOML configuration.
 package config
 
 import (
