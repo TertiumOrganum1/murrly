@@ -1,3 +1,5 @@
+//go:build linux
+
 // Package hotkey grabs a global push-to-talk key on X11.
 package hotkey
 
