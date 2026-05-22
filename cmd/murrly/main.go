@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"embed"
 	"log"
 	"os"
 	"os/exec"
@@ -30,8 +29,10 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/tray"
 )
 
-//go:embed assets/tray/*.png
-var iconFS embed.FS
+// iconFS and iconDir are provided by icons_linux.go / icons_darwin.go —
+// the tray pack is different per platform (Linux gets the colored cat,
+// macOS keeps the menu-bar-style monochrome silhouettes everyone else
+// uses up there).
 
 func main() {
 	closeLog := setupLogging()
@@ -74,10 +75,10 @@ func main() {
 	cb.RestorePrimary = cfg.Output.RestorePrimary
 
 	icons := map[tray.State][]byte{
-		tray.StateIdle:         mustReadIcon("assets/tray/idle_44.png"),
-		tray.StateRecording:    mustReadIcon("assets/tray/recording_44.png"),
-		tray.StateTranscribing: mustReadIcon("assets/tray/transcribing_44.png"),
-		tray.StateError:        mustReadIcon("assets/tray/error_44.png"),
+		tray.StateIdle:         mustReadIcon("idle_44.png"),
+		tray.StateRecording:    mustReadIcon("recording_44.png"),
+		tray.StateTranscribing: mustReadIcon("transcribing_44.png"),
+		tray.StateError:        mustReadIcon("error_44.png"),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -330,10 +331,10 @@ func toTrayState(s app.State) tray.State {
 	}
 }
 
-func mustReadIcon(path string) []byte {
-	b, err := iconFS.ReadFile(path)
+func mustReadIcon(name string) []byte {
+	b, err := iconFS.ReadFile(iconDir + "/" + name)
 	if err != nil {
-		log.Fatalf("embed read %s: %v", path, err)
+		log.Fatalf("embed read %s: %v", name, err)
 	}
 	return b
 }
