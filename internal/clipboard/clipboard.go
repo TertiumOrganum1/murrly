@@ -7,6 +7,12 @@ type Saved struct {
 	HasContent bool
 	Primary    string // X11 primary selection; macOS leaves empty.
 	HasPrimary bool   // X11 primary selection; macOS leaves false.
+	// platformState carries an opaque per-platform handle. On macOS it
+	// holds a CF-retained snapshot of every NSPasteboardItem (text +
+	// image + RTF + file URLs etc.) so Restore puts back the user's
+	// previous clipboard exactly — including non-text content. On Linux
+	// it's unused.
+	platformState uintptr
 }
 
 type Clipboard struct {
