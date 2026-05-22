@@ -26,6 +26,23 @@ type Transcriber struct {
 	mu    sync.Mutex
 }
 
+const (
+	// pcmSampleRateHz matches what the recorder feeds us (mono 16 kHz
+	// float32 — Whisper's native sample rate).
+	pcmSampleRateHz = 16000
+	// longAudioThresholdSec — clips longer than this trigger adaptive
+	// beam search. Whisper's encoder window is 30 s; greedy decode
+	// (beam_size=1) starts degrading well before that — it drops
+	// punctuation and capitalisation on long sequences. 25 s leaves
+	// a margin so even ~28 s push-to-talk sessions get the upgrade.
+	longAudioThresholdSec = 25.0
+	// longAudioBeamSize — beam used for clips past the threshold.
+	// 5 matches upstream whisper-cli's default beam_search mode and
+	// restores punctuation reliably; cost is a few hundred ms extra
+	// on CUDA large-v3 — negligible next to the audio length itself.
+	longAudioBeamSize = 5
+)
+
 // New loads the model into VRAM/GPU memory and allocates the inference
 // context (KV cache + compute buffers, ~680MB for large-v3 turbo). Call
 // once at program start. The context is reused for every Transcribe call —
@@ -84,6 +101,23 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// Adaptive beam: short clips (typical push-to-talk) keep the cheap
+	// configured beam — usually 1, i.e. greedy decode. Long clips get
+	// bumped to longAudioBeamSize so Whisper stops dropping punctuation
+	// and capitalisation. SetBeamSize on every call is cheap (just
+	// updates a struct field on the cached context).
+	baseBeam := t.cfg.BeamSize
+	if baseBeam < 1 {
+		baseBeam = 1
+	}
+	beam := baseBeam
+	audioSec := float64(len(pcm)) / float64(pcmSampleRateHz)
+	if audioSec > longAudioThresholdSec && beam < longAudioBeamSize {
+		beam = longAudioBeamSize
+		log.Printf("transcriber: audio %.1fs > %.0fs threshold — beam_size %d→%d", audioSec, longAudioThresholdSec, baseBeam, beam)
+	}
+	t.ctx.SetBeamSize(beam)
 
 	t0 := time.Now()
 	if err := t.ctx.Process(pcm, nil, nil, nil); err != nil {
