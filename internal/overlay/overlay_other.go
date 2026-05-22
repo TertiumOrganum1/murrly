@@ -6,5 +6,5 @@
 // existing tray icon stays the canonical state indicator there.
 package overlay
 
-func Show(text string) {}
-func Hide()             {}
+func Show(icon []byte, text string) {}
+func Hide()                         {}

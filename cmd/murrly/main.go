@@ -112,7 +112,14 @@ func main() {
 		},
 		OnTranscript: func(text string) {
 			history.Add(text)
-			t.SetRecentTranscripts(history.Snapshot())
+			snap := history.Snapshot()
+			t.SetRecentTranscripts(snap)
+			// Mirror the snapshot into the Dock menu so the right-click
+			// menu shows the same three previews as the tray.
+			latest, _ := first(snap, 0)
+			prev, _ := first(snap, 1)
+			older, _ := first(snap, 2)
+			dockmenu.SetTranscripts(latest, prev, older)
 		},
 	})
 
@@ -139,17 +146,17 @@ func main() {
 	// Dock right-click menu — same actions as the tray menu but reachable
 	// even when the tray icon is hidden behind the notch.
 	dockmenu.Install(
-		func() { cancel(); t.Quit() },
-		func() { openConfigFile(cfgPath) },
-		func() {
-			text, ok := history.Get(0)
+		func(index int) {
+			text, ok := history.Get(index)
 			if !ok {
 				return
 			}
 			if err := cb.Set(text); err != nil {
-				log.Printf("dock copy latest: %v", err)
+				log.Printf("dock copy transcript %d: %v", index, err)
 			}
 		},
+		func() { openConfigFile(cfgPath) },
+		func() { cancel(); t.Quit() },
 	)
 
 	sigs := make(chan os.Signal, 1)
@@ -162,6 +169,14 @@ func main() {
 
 	t.Run() // blocks until systray.Quit() is called
 	hk.Stop()
+}
+
+// first returns snap[i] (or empty + false if out of range).
+func first(snap []string, i int) (string, bool) {
+	if i < 0 || i >= len(snap) {
+		return "", false
+	}
+	return snap[i], true
 }
 
 // openConfigFile opens the config in the user's default text-file handler.

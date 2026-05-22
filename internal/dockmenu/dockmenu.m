@@ -1,26 +1,28 @@
 #import <Cocoa/Cocoa.h>
 #include "dockmenu.h"
 
-typedef void (*mur_callback)(void);
+typedef void (*mur_copy_cb)(int index);
+typedef void (*mur_void_cb)(void);
 
 @interface MurrlyDockMenuDelegate : NSObject <NSApplicationDelegate> {
 @public
     id<NSApplicationDelegate> originalDelegate;
     NSMenu* dockMenu;
-    mur_callback cbQuit;
-    mur_callback cbOpenConfig;
-    mur_callback cbCopyLatest;
+    NSMenuItem* copyItems[3];
+    mur_copy_cb cbCopy;
+    mur_void_cb cbOpenConfig;
+    mur_void_cb cbQuit;
 }
 - (NSMenu*)applicationDockMenu:(NSApplication*)sender;
-- (void)didPickQuit:(id)sender;
+- (void)didPickCopy0:(id)sender;
+- (void)didPickCopy1:(id)sender;
+- (void)didPickCopy2:(id)sender;
 - (void)didPickOpenConfig:(id)sender;
-- (void)didPickCopyLatest:(id)sender;
+- (void)didPickQuit:(id)sender;
 @end
 
 @implementation MurrlyDockMenuDelegate
 
-// Chain unknown selectors to the original (systray-installed) delegate so
-// we don't break anything systray relies on.
 - (BOOL)respondsToSelector:(SEL)aSelector {
     if ([super respondsToSelector:aSelector]) return YES;
     return [originalDelegate respondsToSelector:aSelector];
@@ -34,42 +36,59 @@ typedef void (*mur_callback)(void);
     return dockMenu;
 }
 
-- (void)didPickQuit:(id)sender {
-    if (cbQuit) cbQuit();
-}
-- (void)didPickOpenConfig:(id)sender {
-    if (cbOpenConfig) cbOpenConfig();
-}
-- (void)didPickCopyLatest:(id)sender {
-    if (cbCopyLatest) cbCopyLatest();
-}
+- (void)didPickCopy0:(id)sender { if (cbCopy) cbCopy(0); }
+- (void)didPickCopy1:(id)sender { if (cbCopy) cbCopy(1); }
+- (void)didPickCopy2:(id)sender { if (cbCopy) cbCopy(2); }
+- (void)didPickOpenConfig:(id)sender { if (cbOpenConfig) cbOpenConfig(); }
+- (void)didPickQuit:(id)sender { if (cbQuit) cbQuit(); }
+
 @end
 
 static MurrlyDockMenuDelegate* gMurDelegate = nil;
 
+static NSString* defaultCopyTitle(int idx) {
+    switch (idx) {
+        case 0: return @"Copy latest recognized text";
+        case 1: return @"Copy previous recognized text";
+        case 2: return @"Copy older recognized text";
+        default: return @"";
+    }
+}
+
 void mur_dockmenu_install(
-    void (*onQuit)(void),
+    void (*onCopyTranscript)(int index),
     void (*onOpenConfig)(void),
-    void (*onCopyLatest)(void)
+    void (*onQuit)(void)
 ) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (gMurDelegate) return; // idempotent
+        if (gMurDelegate) return;
 
         gMurDelegate = [[MurrlyDockMenuDelegate alloc] init];
-        gMurDelegate->cbQuit = onQuit;
+        gMurDelegate->cbCopy = onCopyTranscript;
         gMurDelegate->cbOpenConfig = onOpenConfig;
-        gMurDelegate->cbCopyLatest = onCopyLatest;
+        gMurDelegate->cbQuit = onQuit;
         gMurDelegate->originalDelegate = [NSApp delegate];
 
         NSMenu* menu = [[NSMenu alloc] init];
         [menu setAutoenablesItems:NO];
 
-        NSMenuItem* copyItem = [[NSMenuItem alloc]
-            initWithTitle:@"Copy latest transcript"
-            action:@selector(didPickCopyLatest:)
-            keyEquivalent:@""];
-        [copyItem setTarget:gMurDelegate];
-        [menu addItem:copyItem];
+        SEL copySelectors[3] = {
+            @selector(didPickCopy0:),
+            @selector(didPickCopy1:),
+            @selector(didPickCopy2:)
+        };
+        for (int i = 0; i < 3; i++) {
+            NSMenuItem* it = [[NSMenuItem alloc]
+                initWithTitle:defaultCopyTitle(i)
+                action:copySelectors[i]
+                keyEquivalent:@""];
+            [it setTarget:gMurDelegate];
+            [it setEnabled:NO]; // until a transcript exists for that slot
+            [menu addItem:it];
+            gMurDelegate->copyItems[i] = it;
+        }
+
+        [menu addItem:[NSMenuItem separatorItem]];
 
         NSMenuItem* openItem = [[NSMenuItem alloc]
             initWithTitle:@"Open config file"
@@ -90,5 +109,38 @@ void mur_dockmenu_install(
         gMurDelegate->dockMenu = menu;
 
         [NSApp setDelegate:gMurDelegate];
+    });
+}
+
+static NSString* truncatedPreview(NSString* full, NSUInteger limit) {
+    if ([full length] <= limit) return full;
+    return [[full substringToIndex:limit] stringByAppendingString:@"…"];
+}
+
+void mur_dockmenu_set_transcripts(const char* latest, const char* previous, const char* older) {
+    const char* inputs[3] = {latest, previous, older};
+    NSMutableArray* titles = [NSMutableArray arrayWithCapacity:3];
+    NSMutableArray* enabledFlags = [NSMutableArray arrayWithCapacity:3];
+    for (int i = 0; i < 3; i++) {
+        if (inputs[i] && inputs[i][0] != '\0') {
+            NSString* text = [NSString stringWithUTF8String:inputs[i]];
+            NSString* clean = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            NSString* base = defaultCopyTitle(i);
+            NSString* preview = truncatedPreview(clean, 48);
+            [titles addObject:[NSString stringWithFormat:@"%@: %@", base, preview]];
+            [enabledFlags addObject:@YES];
+        } else {
+            [titles addObject:defaultCopyTitle(i)];
+            [enabledFlags addObject:@NO];
+        }
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gMurDelegate) return;
+        for (int i = 0; i < 3; i++) {
+            NSMenuItem* item = gMurDelegate->copyItems[i];
+            if (!item) continue;
+            [item setTitle:titles[i]];
+            [item setEnabled:[enabledFlags[i] boolValue]];
+        }
     });
 }

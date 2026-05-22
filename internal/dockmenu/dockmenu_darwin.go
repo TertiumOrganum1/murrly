@@ -8,47 +8,62 @@ package dockmenu
 /*
 #cgo darwin LDFLAGS: -framework Cocoa
 
+#include <stdlib.h>
 #include "dockmenu.h"
 
-extern void murGoQuit(void);
+extern void murGoCopy(int index);
 extern void murGoOpenConfig(void);
-extern void murGoCopyLatest(void);
+extern void murGoQuit(void);
 */
 import "C"
 
-import "sync"
+import (
+	"sync"
+	"unsafe"
+)
 
 var (
 	cbMu         sync.Mutex
-	cbQuit       func()
+	cbCopy       func(int)
 	cbOpenConfig func()
-	cbCopyLatest func()
+	cbQuit       func()
 )
 
-// Install registers the three callbacks as Dock menu actions. Idempotent —
-// calling more than once replaces the callbacks without re-attaching the
-// menu. Must be called after NSApp exists (i.e. after systray.Run has
-// started its NSApp loop, or any time later from a goroutine).
-func Install(onQuit, onOpenConfig, onCopyLatest func()) {
+// Install registers callbacks for the Dock menu actions. Must be called
+// after NSApp exists (any time during program lifetime is fine —
+// internally we dispatch onto the main thread).
+func Install(onCopy func(int), onOpenConfig, onQuit func()) {
 	cbMu.Lock()
-	cbQuit = onQuit
+	cbCopy = onCopy
 	cbOpenConfig = onOpenConfig
-	cbCopyLatest = onCopyLatest
+	cbQuit = onQuit
 	cbMu.Unlock()
 	C.mur_dockmenu_install(
-		(*[0]byte)(C.murGoQuit),
+		(*[0]byte)(C.murGoCopy),
 		(*[0]byte)(C.murGoOpenConfig),
-		(*[0]byte)(C.murGoCopyLatest),
+		(*[0]byte)(C.murGoQuit),
 	)
 }
 
-//export murGoQuit
-func murGoQuit() {
+// SetTranscripts updates the three Copy-transcript menu items to reflect
+// the current history. Pass empty strings to disable a slot.
+func SetTranscripts(latest, previous, older string) {
+	cLatest := C.CString(latest)
+	cPrev := C.CString(previous)
+	cOlder := C.CString(older)
+	defer C.free(unsafe.Pointer(cLatest))
+	defer C.free(unsafe.Pointer(cPrev))
+	defer C.free(unsafe.Pointer(cOlder))
+	C.mur_dockmenu_set_transcripts(cLatest, cPrev, cOlder)
+}
+
+//export murGoCopy
+func murGoCopy(index C.int) {
 	cbMu.Lock()
-	cb := cbQuit
+	cb := cbCopy
 	cbMu.Unlock()
 	if cb != nil {
-		cb()
+		cb(int(index))
 	}
 }
 
@@ -62,10 +77,10 @@ func murGoOpenConfig() {
 	}
 }
 
-//export murGoCopyLatest
-func murGoCopyLatest() {
+//export murGoQuit
+func murGoQuit() {
 	cbMu.Lock()
-	cb := cbCopyLatest
+	cb := cbQuit
 	cbMu.Unlock()
 	if cb != nil {
 		cb()
