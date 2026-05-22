@@ -3,8 +3,10 @@ package transcriber
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	whisper "github.com/ggerganov/whisper.cpp/bindings/go/pkg/whisper"
@@ -30,15 +32,20 @@ type Transcriber struct {
 // re-allocating Metal buffers on each push-to-talk adds ~1 second on M1 Pro,
 // so caching it is the main latency win.
 func New(cfg Config) (*Transcriber, error) {
+	t0 := time.Now()
 	m, err := whisper.New(cfg.ModelPath)
 	if err != nil {
 		return nil, fmt.Errorf("load model %s: %w", cfg.ModelPath, err)
 	}
+	loadMs := time.Since(t0).Milliseconds()
+	t1 := time.Now()
 	ctx, err := m.NewContext()
 	if err != nil {
 		_ = m.Close()
 		return nil, fmt.Errorf("new context: %w", err)
 	}
+	ctxMs := time.Since(t1).Milliseconds()
+	log.Printf("transcriber: model=%s load=%dms ctx=%dms (total startup=%dms)", cfg.ModelPath, loadMs, ctxMs, loadMs+ctxMs)
 	// Apply config settings once. Language can change per call if needed,
 	// but BeamSize and InitialPrompt are stable.
 	lang := cfg.Language
@@ -78,10 +85,13 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t0 := time.Now()
 	if err := t.ctx.Process(pcm, nil, nil, nil); err != nil {
 		return "", fmt.Errorf("process: %w", err)
 	}
+	processMs := time.Since(t0).Milliseconds()
 
+	t1 := time.Now()
 	var segments []string
 	for {
 		seg, err := t.ctx.NextSegment()
@@ -92,6 +102,8 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 			segments = append(segments, text)
 		}
 	}
+	segMs := time.Since(t1).Milliseconds()
+	log.Printf("transcriber: process=%dms segments=%dms", processMs, segMs)
 	return formatSegments(segments), nil
 }
 
