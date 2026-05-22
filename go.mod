@@ -11,6 +11,7 @@ require (
 
 require (
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
+	golang.design/x/hotkey v0.4.1 // indirect
 	golang.org/x/sys v0.15.0 // indirect
 )
 
