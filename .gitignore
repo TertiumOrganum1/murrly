@@ -1,6 +1,8 @@
 /bin/
+/build/
 /third_party/
 /models/
+/.icon-pack-staging/
 *.o
 *.a
 *.log
