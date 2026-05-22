@@ -68,6 +68,14 @@ trap - EXIT
 
 echo "Installed: $DEST"
 
+# Drop stale TCC grants. Each rebuild changes the ad-hoc cdhash, so the
+# previous Accessibility/Microphone grants no longer apply — but the
+# stale entry sits in System Settings looking enabled and confuses the
+# user. Resetting forces a clean re-grant against the new cdhash.
+tccutil reset Accessibility com.tertiumorganum1.murrly >/dev/null 2>&1 || true
+tccutil reset Microphone    com.tertiumorganum1.murrly >/dev/null 2>&1 || true
+tccutil reset AppleEvents   com.tertiumorganum1.murrly >/dev/null 2>&1 || true
+
 if [[ "$AUTOSTART" == "1" ]]; then
     osascript -e "tell application \"System Events\" to make login item at end with properties {path:\"$DEST\", hidden:true}" >/dev/null
     echo "Autostart enabled (Login Item added)."
