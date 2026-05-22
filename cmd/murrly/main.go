@@ -28,6 +28,8 @@ func main() {
 	closeLog := setupLogging()
 	defer closeLog()
 
+	setupMetalResources()
+
 	cfgPath, err := config.DefaultPath()
 	if err != nil {
 		log.Fatal(err)
