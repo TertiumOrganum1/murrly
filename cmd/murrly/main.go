@@ -15,6 +15,7 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
 	"github.com/tertiumorganum1/murrly/internal/logfile"
 	"github.com/tertiumorganum1/murrly/internal/macospermissions"
+	"github.com/tertiumorganum1/murrly/internal/overlay"
 	"github.com/tertiumorganum1/murrly/internal/paster"
 	"github.com/tertiumorganum1/murrly/internal/recorder"
 	"github.com/tertiumorganum1/murrly/internal/transcriber"
@@ -93,7 +94,19 @@ func main() {
 		Clipboard:   clipAdapter{cb},
 		Paster:      paster.New(),
 		PasteDelay:  time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond,
-		OnState:     func(s app.State) { t.SetState(toTrayState(s)) },
+		OnState: func(s app.State) {
+			t.SetState(toTrayState(s))
+			switch s {
+			case app.StateRecording:
+				overlay.Show("● Listening…")
+			case app.StateTranscribing:
+				overlay.Show("⚙ Transcribing…")
+			case app.StateError:
+				overlay.Show("✕ Error")
+			default:
+				overlay.Hide()
+			}
+		},
 		OnTranscript: func(text string) {
 			history.Add(text)
 			t.SetRecentTranscripts(history.Snapshot())

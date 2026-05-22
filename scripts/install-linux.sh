@@ -66,7 +66,10 @@ remove_legacy_service
 
 mkdir -p "$BIN_DIR" "$APP_DIR" "$ICON_DIR" "$INSTALL_DATA_DIR/models"
 install -m 0755 "$BIN_SRC" "$BIN_DEST"
-install -m 0644 "$REPO_ROOT/cmd/murrly/assets/icon-idle.png" "$ICON_DIR/$APP_ID.png"
+# Use the colored app-icon master (British Shorthair) for the .desktop
+# launcher entry. The monochrome tray icons live alongside the binary
+# (embedded in cmd/murrly/assets/tray/*.png).
+install -m 0644 "$REPO_ROOT/assets/icons/masters/app_icon_master_1024.png" "$ICON_DIR/$APP_ID.png"
 
 if compgen -G "$REPO_ROOT/models/*.bin" >/dev/null; then
 	install -m 0644 "$REPO_ROOT"/models/*.bin "$INSTALL_DATA_DIR/models/"
