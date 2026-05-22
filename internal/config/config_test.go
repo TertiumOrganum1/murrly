@@ -18,8 +18,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Hotkey.Key != "F12" {
 		t.Errorf("default hotkey: got %q, want F12", cfg.Hotkey.Key)
 	}
-	if cfg.Output.PasteDelayMs != 80 {
-		t.Errorf("default paste delay: got %d, want 80", cfg.Output.PasteDelayMs)
+	if cfg.Output.PasteDelayMs != 250 {
+		t.Errorf("default paste delay: got %d, want 250", cfg.Output.PasteDelayMs)
 	}
 	if strings.Contains(cfg.Whisper.ModelPath, "~") {
 		t.Errorf("default model path was not expanded: %q", cfg.Whisper.ModelPath)

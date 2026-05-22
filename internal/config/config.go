@@ -30,6 +30,12 @@ type AudioConfig struct {
 }
 
 type WhisperConfig struct {
+	// Model is a short name like "large-v3", "large-v3-turbo",
+	// "large-v3-turbo-q5_0". Resolved to <ModelsDir>/ggml-<Model>.bin.
+	// Takes precedence over ModelPath when set.
+	Model         string `toml:"model"`
+	// ModelPath is an absolute or ~-expanded path to a .bin file.
+	// Used directly if set and Model is empty.
 	ModelPath     string `toml:"model_path"`
 	Device        string `toml:"device"`
 	ComputeType   string `toml:"compute_type"`
@@ -48,7 +54,8 @@ func defaults() Config {
 		Hotkey: HotkeyConfig{Key: "F12", Mode: "push_to_talk"},
 		Audio:  AudioConfig{Device: "", SampleRate: 16000},
 		Whisper: WhisperConfig{
-			ModelPath:     "", // resolved in Load() from paths.ModelsDir() if empty
+			Model:         "large-v3-turbo-q5_0", // small + fast, comparable to CUDA on M1 Pro
+			ModelPath:     "",                    // optional absolute path; ignored if Model is set
 			Device:        "cuda",
 			ComputeType:   "float16",
 			Language:      "",
@@ -78,8 +85,17 @@ func Load(path string) (Config, error) {
 		}
 	}
 
-	// Resolve ModelPath from paths.ModelsDir() if not set in the config.
-	if cfg.Whisper.ModelPath == "" {
+	// Resolve the model file path. Precedence:
+	//   1. Whisper.Model (short name)  → <ModelsDir>/ggml-<Model>.bin
+	//   2. Whisper.ModelPath           → used as-is (after ~-expansion)
+	//   3. neither set                 → <ModelsDir>/ggml-large-v3.bin (legacy default)
+	if cfg.Whisper.Model != "" {
+		dir, err := paths.ModelsDir()
+		if err != nil {
+			return Config{}, fmt.Errorf("models dir: %w", err)
+		}
+		cfg.Whisper.ModelPath = filepath.Join(dir, "ggml-"+cfg.Whisper.Model+".bin")
+	} else if cfg.Whisper.ModelPath == "" {
 		dir, err := paths.ModelsDir()
 		if err != nil {
 			return Config{}, fmt.Errorf("models dir: %w", err)

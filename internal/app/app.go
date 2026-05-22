@@ -109,13 +109,16 @@ func (a *App) finish() {
 		return
 	}
 	a.setState(StateTranscribing)
+	audioSec := float64(len(pcm)) / 16000.0
+	t0 := time.Now()
 	text, err := a.cfg.Transcriber.Transcribe(pcm)
+	transcribeMs := time.Since(t0).Milliseconds()
 	if err != nil {
 		log.Printf("transcribe: %v", err)
 		a.setState(StateError)
 		return
 	}
-	log.Printf("transcribed: %q", text)
+	log.Printf("transcribed (audio=%.2fs, took=%dms, rtf=%.2fx): %q", audioSec, transcribeMs, float64(transcribeMs)/(audioSec*1000), text)
 	if text == "" {
 		a.setState(StateIdle)
 		return
