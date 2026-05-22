@@ -19,17 +19,47 @@ type Config struct {
 
 type Transcriber struct {
 	model whisper.Model
+	ctx   whisper.Context // reused across transcriptions to avoid per-call buffer allocation
 	cfg   Config
 	mu    sync.Mutex
 }
 
-// New loads the model into VRAM. Call once at program start.
+// New loads the model into VRAM/GPU memory and allocates the inference
+// context (KV cache + compute buffers, ~680MB for large-v3 turbo). Call
+// once at program start. The context is reused for every Transcribe call —
+// re-allocating Metal buffers on each push-to-talk adds ~1 second on M1 Pro,
+// so caching it is the main latency win.
 func New(cfg Config) (*Transcriber, error) {
 	m, err := whisper.New(cfg.ModelPath)
 	if err != nil {
 		return nil, fmt.Errorf("load model %s: %w", cfg.ModelPath, err)
 	}
-	return &Transcriber{model: m, cfg: cfg}, nil
+	ctx, err := m.NewContext()
+	if err != nil {
+		_ = m.Close()
+		return nil, fmt.Errorf("new context: %w", err)
+	}
+	// Apply config settings once. Language can change per call if needed,
+	// but BeamSize and InitialPrompt are stable.
+	lang := cfg.Language
+	if lang == "" {
+		// whisper_full_default_params defaults language to "en", which makes
+		// the model transcribe Russian speech as if it were English (lost
+		// punctuation, pseudo-translation, mangled terms). "auto" lets
+		// Whisper detect language from the input.
+		lang = "auto"
+	}
+	if err := ctx.SetLanguage(lang); err != nil {
+		_ = m.Close()
+		return nil, fmt.Errorf("set language %q: %w", lang, err)
+	}
+	if cfg.BeamSize > 0 {
+		ctx.SetBeamSize(cfg.BeamSize)
+	}
+	if cfg.InitialPrompt != "" {
+		ctx.SetInitialPrompt(cfg.InitialPrompt)
+	}
+	return &Transcriber{model: m, ctx: ctx, cfg: cfg}, nil
 }
 
 func (t *Transcriber) Close() error {
@@ -48,34 +78,13 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	ctx, err := t.model.NewContext()
-	if err != nil {
-		return "", fmt.Errorf("new context: %w", err)
-	}
-	// whisper_full_default_params defaults language to "en", which makes the
-	// model transcribe Russian speech as if it were English (lost punctuation,
-	// pseudo-translation, mangled terms). An empty config means "auto-detect".
-	lang := t.cfg.Language
-	if lang == "" {
-		lang = "auto"
-	}
-	if err := ctx.SetLanguage(lang); err != nil {
-		return "", fmt.Errorf("set language %q: %w", lang, err)
-	}
-	if t.cfg.BeamSize > 0 {
-		ctx.SetBeamSize(t.cfg.BeamSize)
-	}
-	if t.cfg.InitialPrompt != "" {
-		ctx.SetInitialPrompt(t.cfg.InitialPrompt)
-	}
-
-	if err := ctx.Process(pcm, nil, nil, nil); err != nil {
+	if err := t.ctx.Process(pcm, nil, nil, nil); err != nil {
 		return "", fmt.Errorf("process: %w", err)
 	}
 
 	var segments []string
 	for {
-		seg, err := ctx.NextSegment()
+		seg, err := t.ctx.NextSegment()
 		if err != nil {
 			break
 		}

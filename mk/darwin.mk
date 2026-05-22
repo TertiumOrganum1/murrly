@@ -38,7 +38,7 @@ build: whisper
 	LIBRARY_PATH="$(LIBRARY_PATH)" \
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS_DARWIN)" \
-	go build -o $(BIN) ./cmd/murrly
+	go build -trimpath -buildvcs=false -o $(BIN) ./cmd/murrly
 
 install: build
 	scripts/install-mac.sh
