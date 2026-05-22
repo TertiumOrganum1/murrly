@@ -52,10 +52,14 @@ func defaults() Config {
 			Device:        "cuda",
 			ComputeType:   "float16",
 			Language:      "",
-			BeamSize:      5,
+			BeamSize:      1, // greedy decode; beam_size>1 is ~5x slower with only marginal accuracy gain on push-to-talk
 			InitialPrompt: "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
 		},
-		Output: OutputConfig{PasteDelayMs: 80, RestorePrimary: true},
+		// PasteDelayMs sits between Set-clipboard / Cmd-V and the Restore-clipboard
+		// step. Too short and the focused app reads the restored (old) clipboard
+		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip
+		// tolerates lower values.
+		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true},
 	}
 }
 
