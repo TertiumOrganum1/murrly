@@ -64,7 +64,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("transcriber: %v", err)
 	}
-	defer tr.Close()
+	loader := newTranscriberLoader(tr, cfg.Whisper)
+	// loader.tr is closed (via Reload's old.Close()) on every model swap;
+	// the final one shuts down at program exit when the process dies.
 
 	cb := clipboard.New()
 	cb.RestorePrimary = cfg.Output.RestorePrimary
@@ -111,14 +113,22 @@ func main() {
 			if index < 0 || index >= len(modelinfo.Available) {
 				return
 			}
-			switchModelAndRestart(cfgPath, cfg, modelinfo.Available[index])
+			name := modelinfo.Available[index]
+			if err := loader.Reload(name); err != nil {
+				log.Printf("model pick: %v", err)
+				return
+			}
+			if err := persistModelChoice(cfgPath, cfg, name); err != nil {
+				log.Printf("model pick: persist config: %v", err)
+			}
+			dockmenu.SetActiveModel(index)
 		},
 		OnQuit: cancel,
 	})
 
 	a := app.New(app.Config{
 		Recorder:    recorder.New(),
-		Transcriber: tr,
+		Transcriber: loader,
 		Clipboard:   clipAdapter{cb},
 		Paster:      paster.New(),
 		PasteDelay:  time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond,
@@ -188,7 +198,15 @@ func main() {
 			if index < 0 || index >= len(modelinfo.Available) {
 				return
 			}
-			switchModelAndRestart(cfgPath, cfg, modelinfo.Available[index])
+			name := modelinfo.Available[index]
+			if err := loader.Reload(name); err != nil {
+				log.Printf("dock model pick: %v", err)
+				return
+			}
+			if err := persistModelChoice(cfgPath, cfg, name); err != nil {
+				log.Printf("dock model pick: persist: %v", err)
+			}
+			dockmenu.SetActiveModel(index)
 		},
 		func() {
 			if autostart.Enabled() {
