@@ -26,6 +26,9 @@ type Actions struct {
 	OnCopyTranscript  func(index int)
 	OnToggleAutostart func() bool // returns the new state after toggling
 	IsAutostartOn     func() bool
+	OnPickModel       func(index int)
+	ModelLabels       []string
+	ActiveModelIndex  int // -1 if none active
 	OnQuit            func()
 }
 
@@ -93,12 +96,34 @@ func (t *Tray) onReady() {
 		item.Disable()
 	}
 	systray.AddSeparator()
+	modelHeader := systray.AddMenuItem("Модель", "Выбрать модель Whisper")
+	modelItems := make([]*systray.MenuItem, len(t.actions.ModelLabels))
+	for i, lbl := range t.actions.ModelLabels {
+		modelItems[i] = modelHeader.AddSubMenuItem(lbl, "")
+		if i == t.actions.ActiveModelIndex {
+			modelItems[i].Check()
+		}
+	}
 	autostartItem := systray.AddMenuItem("Запускать при логине", "Стартовать Murrly автоматически при входе в систему")
 	if t.actions.IsAutostartOn != nil && t.actions.IsAutostartOn() {
 		autostartItem.Check()
 	}
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Завершить Murrly", "Закрыть Murrly")
+
+	// systray's API gives one ClickedCh per item; rather than expand the
+	// main select, fan model-pick clicks out from a per-item goroutine.
+	for i, item := range modelItems {
+		idx := i
+		mi := item
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnPickModel != nil {
+					t.actions.OnPickModel(idx)
+				}
+			}
+		}()
+	}
 
 	go func() {
 		for {

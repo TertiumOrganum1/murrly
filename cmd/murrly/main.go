@@ -19,6 +19,7 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
 	"github.com/tertiumorganum1/murrly/internal/logfile"
 	"github.com/tertiumorganum1/murrly/internal/macospermissions"
+	"github.com/tertiumorganum1/murrly/internal/modelinfo"
 	"github.com/tertiumorganum1/murrly/internal/overlay"
 	"github.com/tertiumorganum1/murrly/internal/paster"
 	"github.com/tertiumorganum1/murrly/internal/recorder"
@@ -104,6 +105,14 @@ func main() {
 			dockmenu.SetAutostart(newState) // keep dock menu in sync
 			return newState
 		},
+		ModelLabels:      buildTrayModelLabels(),
+		ActiveModelIndex: indexOf(modelinfo.Available, cfg.Whisper.Model),
+		OnPickModel: func(index int) {
+			if index < 0 || index >= len(modelinfo.Available) {
+				return
+			}
+			switchModelAndRestart(cfgPath, cfg, modelinfo.Available[index])
+		},
 		OnQuit: cancel,
 	})
 
@@ -161,6 +170,10 @@ func main() {
 
 	// Dock right-click menu — same actions as the tray menu but reachable
 	// even when the tray icon is hidden behind the notch.
+	modelLabels := make([]string, len(modelinfo.Available))
+	for i, name := range modelinfo.Available {
+		modelLabels[i] = modelinfo.Labels[name]
+	}
 	dockmenu.Install(
 		func(index int) {
 			text, ok := history.Get(index)
@@ -170,6 +183,12 @@ func main() {
 			if err := cb.Set(text); err != nil {
 				log.Printf("dock copy transcript %d: %v", index, err)
 			}
+		},
+		func(index int) {
+			if index < 0 || index >= len(modelinfo.Available) {
+				return
+			}
+			switchModelAndRestart(cfgPath, cfg, modelinfo.Available[index])
 		},
 		func() {
 			if autostart.Enabled() {
@@ -185,9 +204,11 @@ func main() {
 		},
 		func() { openConfigFile(cfgPath) },
 		func() { cancel(); t.Quit() },
+		modelLabels,
 	)
-	// Reflect current Login Item state in the menu checkmark on startup.
+	// Reflect current state in the menus on startup.
 	dockmenu.SetAutostart(autostart.Enabled())
+	dockmenu.SetActiveModel(indexOf(modelinfo.Available, cfg.Whisper.Model))
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -199,6 +220,24 @@ func main() {
 
 	t.Run() // blocks until systray.Quit() is called
 	hk.Stop()
+}
+
+func buildTrayModelLabels() []string {
+	out := make([]string, len(modelinfo.Available))
+	for i, name := range modelinfo.Available {
+		out[i] = modelinfo.Labels[name]
+	}
+	return out
+}
+
+// indexOf returns the position of v in s, or -1 if absent.
+func indexOf(s []string, v string) int {
+	for i, e := range s {
+		if e == v {
+			return i
+		}
+	}
+	return -1
 }
 
 // first returns snap[i] (or empty + false if out of range).

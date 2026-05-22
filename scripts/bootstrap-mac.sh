@@ -35,13 +35,28 @@ brew install cmake portaudio go librsvg
 echo "==> Building whisper.cpp with Metal acceleration..."
 make whisper
 
-echo "==> Downloading model: $MODEL"
-make model MODEL="$MODEL"
-
 DATA_DIR="$HOME/Library/Application Support/Murrly/models"
 mkdir -p "$DATA_DIR"
-install -m 0644 "models/ggml-$MODEL.bin" "$DATA_DIR/"
-echo "Model staged: $DATA_DIR/ggml-$MODEL.bin"
+
+# MODELS=all downloads all three menu-picker variants so the user can
+# switch between them at runtime without rerunning bootstrap. Default is
+# just the single $MODEL.
+if [[ "${MODELS:-}" == "all" ]]; then
+    for m in large-v3 large-v3-turbo large-v3-turbo-q5_0; do
+        echo "==> Downloading model: $m"
+        if [[ ! -f "$DATA_DIR/ggml-$m.bin" ]]; then
+            curl -L -o "$DATA_DIR/ggml-$m.bin" \
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$m.bin?download=true"
+        else
+            echo "(already present, skipping)"
+        fi
+    done
+else
+    echo "==> Downloading model: $MODEL"
+    make model MODEL="$MODEL"
+    install -m 0644 "models/ggml-$MODEL.bin" "$DATA_DIR/"
+    echo "Model staged: $DATA_DIR/ggml-$MODEL.bin"
+fi
 
 echo "==> Building murrly binary..."
 make build

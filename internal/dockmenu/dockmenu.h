@@ -1,21 +1,27 @@
 #ifndef MURRLY_DOCKMENU_H
 #define MURRLY_DOCKMENU_H
 
-// Install builds the Dock right-click menu with Copy-transcript slots
-// (indices 0..2 = latest, previous, older), an autostart toggle, plus
-// Open Config and Quit.
+// Install builds the Dock right-click menu:
+//   * Copy-transcript slots (indices 0..2 = latest, previous, older)
+//   * Model submenu (modelLabels[N], picked by index)
+//   * Autostart toggle
+//   * Open Config
+//   * Quit
+//
+// modelLabels is a NULL-terminated array of UTF-8 C strings. modelCount
+// must match the array length excluding the terminator.
 void mur_dockmenu_install(
     void (*onCopyTranscript)(int index),
+    void (*onPickModel)(int index),
     void (*onToggleAutostart)(void),
     void (*onOpenConfig)(void),
-    void (*onQuit)(void)
+    void (*onQuit)(void),
+    const char* const* modelLabels,
+    int modelCount
 );
 
-// Update the user-visible titles of the three transcript items. Pass
-// NULL or empty string to disable a slot (it will appear greyed out).
 void mur_dockmenu_set_transcripts(const char* latest, const char* previous, const char* older);
-
-// Set the checkmark on the autostart toggle. Pass 1 for enabled, 0 for disabled.
 void mur_dockmenu_set_autostart(int enabled);
+void mur_dockmenu_set_model_index(int index); // marks the active model with a checkmark
 
 #endif

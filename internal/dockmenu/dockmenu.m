@@ -1,7 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #include "dockmenu.h"
 
-typedef void (*mur_copy_cb)(int index);
+typedef void (*mur_int_cb)(int index);
 typedef void (*mur_void_cb)(void);
 
 @interface MurrlyDockMenuDelegate : NSObject <NSApplicationDelegate> {
@@ -10,7 +10,9 @@ typedef void (*mur_void_cb)(void);
     NSMenu* dockMenu;
     NSMenuItem* copyItems[3];
     NSMenuItem* autostartItem;
-    mur_copy_cb cbCopy;
+    NSMutableArray<NSMenuItem*>* modelItems;
+    mur_int_cb cbCopy;
+    mur_int_cb cbPickModel;
     mur_void_cb cbToggleAutostart;
     mur_void_cb cbOpenConfig;
     mur_void_cb cbQuit;
@@ -19,6 +21,7 @@ typedef void (*mur_void_cb)(void);
 - (void)didPickCopy0:(id)sender;
 - (void)didPickCopy1:(id)sender;
 - (void)didPickCopy2:(id)sender;
+- (void)didPickModel:(id)sender;
 - (void)didPickAutostart:(id)sender;
 - (void)didPickOpenConfig:(id)sender;
 - (void)didPickQuit:(id)sender;
@@ -42,6 +45,10 @@ typedef void (*mur_void_cb)(void);
 - (void)didPickCopy0:(id)sender { if (cbCopy) cbCopy(0); }
 - (void)didPickCopy1:(id)sender { if (cbCopy) cbCopy(1); }
 - (void)didPickCopy2:(id)sender { if (cbCopy) cbCopy(2); }
+- (void)didPickModel:(id)sender {
+    NSMenuItem* item = (NSMenuItem*)sender;
+    if (cbPickModel) cbPickModel((int)[item tag]);
+}
 - (void)didPickAutostart:(id)sender { if (cbToggleAutostart) cbToggleAutostart(); }
 - (void)didPickOpenConfig:(id)sender { if (cbOpenConfig) cbOpenConfig(); }
 - (void)didPickQuit:(id)sender { if (cbQuit) cbQuit(); }
@@ -62,19 +69,31 @@ static NSString* emptySlotTitle(int idx) {
 
 void mur_dockmenu_install(
     void (*onCopyTranscript)(int index),
+    void (*onPickModel)(int index),
     void (*onToggleAutostart)(void),
     void (*onOpenConfig)(void),
-    void (*onQuit)(void)
+    void (*onQuit)(void),
+    const char* const* modelLabels,
+    int modelCount
 ) {
+    // Capture into Cocoa types up front; the block below runs async on
+    // the main thread and a C array pointer may not be safe to keep.
+    NSMutableArray<NSString*>* labels = [NSMutableArray arrayWithCapacity:modelCount];
+    for (int i = 0; i < modelCount; i++) {
+        const char* s = modelLabels[i];
+        [labels addObject:s ? [NSString stringWithUTF8String:s] : @""];
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gMurDelegate) return;
 
         gMurDelegate = [[MurrlyDockMenuDelegate alloc] init];
         gMurDelegate->cbCopy = onCopyTranscript;
+        gMurDelegate->cbPickModel = onPickModel;
         gMurDelegate->cbToggleAutostart = onToggleAutostart;
         gMurDelegate->cbOpenConfig = onOpenConfig;
         gMurDelegate->cbQuit = onQuit;
         gMurDelegate->originalDelegate = [NSApp delegate];
+        gMurDelegate->modelItems = [NSMutableArray array];
 
         NSMenu* menu = [[NSMenu alloc] init];
         [menu setAutoenablesItems:NO];
@@ -96,6 +115,27 @@ void mur_dockmenu_install(
         }
 
         [menu addItem:[NSMenuItem separatorItem]];
+
+        // Model submenu.
+        NSMenuItem* modelHeader = [[NSMenuItem alloc]
+            initWithTitle:@"Модель"
+            action:NULL
+            keyEquivalent:@""];
+        NSMenu* modelSubmenu = [[NSMenu alloc] init];
+        [modelSubmenu setAutoenablesItems:NO];
+        for (int i = 0; i < (int)[labels count]; i++) {
+            NSMenuItem* modelItem = [[NSMenuItem alloc]
+                initWithTitle:labels[i]
+                action:@selector(didPickModel:)
+                keyEquivalent:@""];
+            [modelItem setTarget:gMurDelegate];
+            [modelItem setTag:i];
+            [modelItem setState:NSControlStateValueOff];
+            [modelSubmenu addItem:modelItem];
+            [gMurDelegate->modelItems addObject:modelItem];
+        }
+        [modelHeader setSubmenu:modelSubmenu];
+        [menu addItem:modelHeader];
 
         NSMenuItem* autoItem = [[NSMenuItem alloc]
             initWithTitle:@"Запускать при логине"
@@ -131,6 +171,16 @@ void mur_dockmenu_install(
 static NSString* truncatedPreview(NSString* full, NSUInteger limit) {
     if ([full length] <= limit) return full;
     return [[full substringToIndex:limit] stringByAppendingString:@"…"];
+}
+
+void mur_dockmenu_set_model_index(int index) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gMurDelegate) return;
+        for (int i = 0; i < (int)[gMurDelegate->modelItems count]; i++) {
+            NSMenuItem* it = gMurDelegate->modelItems[i];
+            [it setState:(i == index) ? NSControlStateValueOn : NSControlStateValueOff];
+        }
+    });
 }
 
 void mur_dockmenu_set_autostart(int enabled) {

@@ -1,8 +1,6 @@
 //go:build darwin
 
-// Package dockmenu installs a right-click menu on the Dock icon. Useful
-// when the menu-bar tray icon is hidden behind the notch on M-series
-// Macs — the Dock icon is always reachable.
+// Package dockmenu installs a right-click menu on the Dock icon.
 package dockmenu
 
 /*
@@ -12,6 +10,7 @@ package dockmenu
 #include "dockmenu.h"
 
 extern void murGoCopy(int index);
+extern void murGoPickModel(int index);
 extern void murGoToggleAutostart(void);
 extern void murGoOpenConfig(void);
 extern void murGoQuit(void);
@@ -26,30 +25,53 @@ import (
 var (
 	cbMu              sync.Mutex
 	cbCopy            func(int)
+	cbPickModel       func(int)
 	cbToggleAutostart func()
 	cbOpenConfig      func()
 	cbQuit            func()
 )
 
-// Install registers callbacks for the Dock menu actions. Must be called
-// after NSApp exists.
-func Install(onCopy func(int), onToggleAutostart, onOpenConfig, onQuit func()) {
+// Install registers callbacks for the Dock menu actions and seeds the
+// Model submenu with the provided labels.
+func Install(
+	onCopy func(int),
+	onPickModel func(int),
+	onToggleAutostart, onOpenConfig, onQuit func(),
+	modelLabels []string,
+) {
 	cbMu.Lock()
 	cbCopy = onCopy
+	cbPickModel = onPickModel
 	cbToggleAutostart = onToggleAutostart
 	cbOpenConfig = onOpenConfig
 	cbQuit = onQuit
 	cbMu.Unlock()
+
+	cLabels := make([]*C.char, len(modelLabels))
+	for i, s := range modelLabels {
+		cLabels[i] = C.CString(s)
+	}
+	defer func() {
+		for _, p := range cLabels {
+			C.free(unsafe.Pointer(p))
+		}
+	}()
+	var labelsPtr **C.char
+	if len(cLabels) > 0 {
+		labelsPtr = (**C.char)(unsafe.Pointer(&cLabels[0]))
+	}
+
 	C.mur_dockmenu_install(
 		(*[0]byte)(C.murGoCopy),
+		(*[0]byte)(C.murGoPickModel),
 		(*[0]byte)(C.murGoToggleAutostart),
 		(*[0]byte)(C.murGoOpenConfig),
 		(*[0]byte)(C.murGoQuit),
+		labelsPtr,
+		C.int(len(cLabels)),
 	)
 }
 
-// SetTranscripts updates the three Copy-transcript menu items to reflect
-// the current history. Pass empty strings to disable a slot.
 func SetTranscripts(latest, previous, older string) {
 	cLatest := C.CString(latest)
 	cPrev := C.CString(previous)
@@ -60,8 +82,6 @@ func SetTranscripts(latest, previous, older string) {
 	C.mur_dockmenu_set_transcripts(cLatest, cPrev, cOlder)
 }
 
-// SetAutostart updates the checkmark next to the "Запускать при логине"
-// item to reflect the current Login Item state.
 func SetAutostart(enabled bool) {
 	v := C.int(0)
 	if enabled {
@@ -70,10 +90,26 @@ func SetAutostart(enabled bool) {
 	C.mur_dockmenu_set_autostart(v)
 }
 
+// SetActiveModel marks the model at the given index (matching the order
+// passed to Install) with a checkmark, clearing others. Pass -1 to clear.
+func SetActiveModel(index int) {
+	C.mur_dockmenu_set_model_index(C.int(index))
+}
+
 //export murGoCopy
 func murGoCopy(index C.int) {
 	cbMu.Lock()
 	cb := cbCopy
+	cbMu.Unlock()
+	if cb != nil {
+		cb(int(index))
+	}
+}
+
+//export murGoPickModel
+func murGoPickModel(index C.int) {
+	cbMu.Lock()
+	cb := cbPickModel
 	cbMu.Unlock()
 	if cb != nil {
 		cb(int(index))

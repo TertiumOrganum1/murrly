@@ -79,12 +79,27 @@ if [[ -z "$CUDA_HOST_COMPILER" ]]; then
 fi
 
 echo "Using CUDA host compiler: $CUDA_HOST_COMPILER"
-echo "Building whisper.cpp and downloading model: $MODEL"
-make model MODEL="$MODEL" CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
+echo "Building whisper.cpp..."
+make whisper CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
 
-echo "Installing model into user data directory..."
-mkdir -p "$HOME/.local/share/murrly/models"
-install -m 0644 "models/ggml-$MODEL.bin" "$HOME/.local/share/murrly/models/"
+DATA_DIR="$HOME/.local/share/murrly/models"
+mkdir -p "$DATA_DIR"
+
+if [[ "${MODELS:-}" == "all" ]]; then
+	for m in large-v3 large-v3-turbo large-v3-turbo-q5_0; do
+		echo "Downloading model: $m"
+		if [[ ! -f "$DATA_DIR/ggml-$m.bin" ]]; then
+			curl -L -o "$DATA_DIR/ggml-$m.bin" \
+				"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-$m.bin?download=true"
+		else
+			echo "(already present, skipping)"
+		fi
+	done
+else
+	echo "Downloading model: $MODEL"
+	make model MODEL="$MODEL" CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
+	install -m 0644 "models/ggml-$MODEL.bin" "$DATA_DIR/"
+fi
 
 echo "Building murrly..."
 make build CUDA_HOST_COMPILER="$CUDA_HOST_COMPILER"
