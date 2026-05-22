@@ -47,7 +47,7 @@ func defaults() Config {
 		Hotkey: HotkeyConfig{Key: "F12", Mode: "push_to_talk"},
 		Audio:  AudioConfig{Device: "", SampleRate: 16000},
 		Whisper: WhisperConfig{
-			ModelPath:     "~/.local/share/voice-input/models/ggml-large-v3.bin",
+			ModelPath:     "~/.local/share/murrly/models/ggml-large-v3.bin",
 			Device:        "cuda",
 			ComputeType:   "float16",
 			Language:      "",
@@ -110,11 +110,11 @@ func writeDefault(path string) error {
 	return toml.NewEncoder(f).Encode(defaults())
 }
 
-// DefaultPath returns ~/.config/voice-input/config.toml.
+// DefaultPath returns ~/.config/murrly/config.toml.
 func DefaultPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".config", "voice-input", "config.toml"), nil
+	return filepath.Join(home, ".config", "murrly", "config.toml"), nil
 }

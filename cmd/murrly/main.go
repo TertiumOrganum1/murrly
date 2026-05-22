@@ -126,7 +126,7 @@ func main() {
 }
 
 func setupLogging() func() {
-	path, err := logfile.DefaultPath("voice-input")
+	path, err := logfile.DefaultPath("murrly")
 	if err != nil {
 		log.Printf("log path: %v", err)
 		return func() {}
