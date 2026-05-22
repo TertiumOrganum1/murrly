@@ -40,11 +40,12 @@ const (
 	// roughly this length.
 	longAudioThresholdSec = 25.0
 	// shortAudioBeamSize / longAudioBeamSize — beam values when
-	// cfg.Adaptive is true. Going from 1 to 2 already flips the
-	// decoder from greedy to beam_search, which is the main quality
-	// jump; widening further yields little for ~2-3× the cost.
+	// cfg.Adaptive is true. Short clips use width 1 (effectively
+	// greedy — fastest); long clips bump to 5 (upstream whisper-cli
+	// default). 5 is what empirically restores punctuation on long
+	// dictations — narrower widths (2-3) turned out insufficient.
 	shortAudioBeamSize = 1
-	longAudioBeamSize  = 2
+	longAudioBeamSize  = 5
 )
 
 // New loads the model into VRAM/GPU memory and allocates the inference

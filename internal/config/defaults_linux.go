@@ -2,8 +2,10 @@
 
 package config
 
-// defaultBeamSize on Linux is 2 — Whisper switches from greedy to
-// beam_search at this width, which keeps punctuation and capitalisation
-// intact on long clips. CUDA + large-v3 handles beam=2 in well under a
-// second even for 40+ s recordings, so the cost is negligible.
-func defaultBeamSize() int { return 2 }
+// defaultBeamSize on Linux is 5 — matches upstream whisper-cli's
+// beam_search default. Width 2-3 turned out to be too narrow on long
+// dictations (Whisper still occasionally dropped punctuation in
+// observed transcripts); 5 reliably keeps full formatting. CUDA +
+// large-v3 handles beam=5 in well under a second per call, so the
+// cost is negligible.
+func defaultBeamSize() int { return 5 }
