@@ -54,8 +54,13 @@ func defaults() Config {
 		Hotkey: HotkeyConfig{Key: "F12", Mode: "push_to_talk"},
 		Audio:  AudioConfig{Device: "", SampleRate: 16000},
 		Whisper: WhisperConfig{
-			Model:         "large-v3-turbo-q5_0", // small + fast, comparable to CUDA on M1 Pro
-			ModelPath:     "",                    // optional absolute path; ignored if Model is set
+			// Model = "" means "use the legacy default ggml-large-v3.bin".
+			// That matches what scripts/bootstrap-{ubuntu,mac}.sh download
+			// by default (MODEL=large-v3). Users who run MODELS=all can
+			// switch via the tray menu, which writes a non-empty Model
+			// short-name back to config.
+			Model:         "",
+			ModelPath:     "", // optional absolute path; ignored if Model is set
 			Device:        "cuda",
 			ComputeType:   "float16",
 			Language:      "",
@@ -100,7 +105,11 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("models dir: %w", err)
 		}
-		cfg.Whisper.ModelPath = filepath.Join(dir, "ggml-large-v3.bin")
+		// Legacy default. Set Model too so the tray/dock model-picker
+		// shows the correct checkmark on a fresh install instead of "no
+		// active model" (-1).
+		cfg.Whisper.Model = "large-v3"
+		cfg.Whisper.ModelPath = filepath.Join(dir, "ggml-"+cfg.Whisper.Model+".bin")
 	}
 
 	expandPaths(&cfg)

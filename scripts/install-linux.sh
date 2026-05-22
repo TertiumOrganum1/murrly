@@ -14,7 +14,7 @@ BIN_DEST="$BIN_DIR/$APP_ID"
 INSTALL_DATA_DIR="${INSTALL_DATA_DIR:-$HOME/.local/share/murrly}"
 
 APP_DIR="$HOME/.local/share/applications"
-ICON_DIR="$HOME/.local/share/icons/hicolor/64x64/apps"
+ICON_BASE="$HOME/.local/share/icons/hicolor"
 AUTOSTART_DIR="$HOME/.config/autostart"
 LEGACY_SERVICE="$HOME/.config/systemd/user/murrly.service"
 
@@ -36,7 +36,7 @@ Comment=Murrly — local push-to-talk speech-to-text
 Exec=$BIN_DEST
 Icon=$APP_ID
 Terminal=false
-Categories=Utility;Accessibility;
+Categories=Other;
 StartupNotify=false
 EOF
 
@@ -64,12 +64,22 @@ remove_legacy_service() {
 
 remove_legacy_service
 
-mkdir -p "$BIN_DIR" "$APP_DIR" "$ICON_DIR" "$INSTALL_DATA_DIR/models"
+mkdir -p "$BIN_DIR" "$APP_DIR" "$INSTALL_DATA_DIR/models"
 install -m 0755 "$BIN_SRC" "$BIN_DEST"
-# Use the colored app-icon master (British Shorthair) for the .desktop
-# launcher entry. The monochrome tray icons live alongside the binary
-# (embedded in cmd/murrly/assets/tray/*.png).
-install -m 0644 "$REPO_ROOT/assets/icons/masters/app_icon_master_1024.png" "$ICON_DIR/$APP_ID.png"
+
+# Install the Linux-specific colored cat-head app icon at every size we
+# ship, so the DE can pick the correct resolution for the launcher, app
+# switcher, and any other surface. The full-body British Shorthair in
+# assets/icons/app/ is reserved for the macOS .app bundle and .icns.
+# Tray icons live alongside the binary (embedded in
+# cmd/murrly/assets/tray/*.png).
+for size in 22 32 64 128 256; do
+	src="$REPO_ROOT/assets/linux/cat_head/cat_head_${size}x${size}.png"
+	[[ -f "$src" ]] || continue
+	size_dir="$ICON_BASE/${size}x${size}/apps"
+	mkdir -p "$size_dir"
+	install -m 0644 "$src" "$size_dir/$APP_ID.png"
+done
 
 if compgen -G "$REPO_ROOT/models/*.bin" >/dev/null; then
 	install -m 0644 "$REPO_ROOT"/models/*.bin "$INSTALL_DATA_DIR/models/"
@@ -89,8 +99,17 @@ if command -v update-desktop-database >/dev/null 2>&1; then
 	update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true
 fi
 
+# gtk-update-icon-cache needs an index.theme. The user-local hicolor dir
+# is often empty before any app has installed there, so seed it from the
+# system theme (54KB, just the size/context metadata — no icons).
+SYS_INDEX="/usr/share/icons/hicolor/index.theme"
+USER_INDEX="$ICON_BASE/index.theme"
+if [[ ! -f "$USER_INDEX" && -f "$SYS_INDEX" ]]; then
+	install -m 0644 "$SYS_INDEX" "$USER_INDEX"
+fi
+
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-	gtk-update-icon-cache "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+	gtk-update-icon-cache --force "$ICON_BASE" >/dev/null 2>&1 || true
 fi
 
 cat <<EOF

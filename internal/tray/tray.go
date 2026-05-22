@@ -33,20 +33,22 @@ type Actions struct {
 }
 
 type Tray struct {
-	icons        map[State][]byte
-	stateCh      chan State
-	transcriptCh chan []string
-	actions      Actions
-	configPath   string
+	icons         map[State][]byte
+	stateCh       chan State
+	transcriptCh  chan []string
+	activeModelCh chan int
+	actions       Actions
+	configPath    string
 }
 
 func New(icons map[State][]byte, configPath string, actions Actions) *Tray {
 	return &Tray{
-		icons:        icons,
-		stateCh:      make(chan State, 8),
-		transcriptCh: make(chan []string, 8),
-		actions:      actions,
-		configPath:   configPath,
+		icons:         icons,
+		stateCh:       make(chan State, 8),
+		transcriptCh:  make(chan []string, 8),
+		activeModelCh: make(chan int, 8),
+		actions:       actions,
+		configPath:    configPath,
 	}
 }
 
@@ -76,6 +78,16 @@ func (t *Tray) SetRecentTranscripts(items []string) {
 	}
 }
 
+// SetActiveModel moves the checkmark in the Model submenu to the item at
+// the given index. Pass -1 to clear all checkmarks. Called from the
+// model-pick callback after a successful hot-swap.
+func (t *Tray) SetActiveModel(index int) {
+	select {
+	case t.activeModelCh <- index:
+	default:
+	}
+}
+
 func (t *Tray) onReady() {
 	systray.SetTitle("Murrly")
 	systray.SetTooltip("Murrly: idle")
@@ -95,19 +107,26 @@ func (t *Tray) onReady() {
 		item.SetTitle(transcriptMenuTitle(i, ""))
 		item.Disable()
 	}
-	systray.AddSeparator()
-	modelHeader := systray.AddMenuItem("Модель", "Выбрать модель Whisper")
-	modelItems := make([]*systray.MenuItem, len(t.actions.ModelLabels))
-	for i, lbl := range t.actions.ModelLabels {
-		modelItems[i] = modelHeader.AddSubMenuItem(lbl, "")
-		if i == t.actions.ActiveModelIndex {
-			modelItems[i].Check()
+	// Hide the model picker if fewer than 2 models are available —
+	// there's nothing to pick between.
+	var modelItems []*systray.MenuItem
+	if len(t.actions.ModelLabels) >= 2 {
+		systray.AddSeparator()
+		// AddSubMenuItemCheckbox is required on Linux: AddSubMenuItem
+		// creates items with toggle-type="" in dbusmenu, which
+		// Cinnamon/AppIndicator renders without their label. The
+		// checkbox variant also lets Check()/Uncheck() actually move
+		// the visible checkmark, which is a no-op on Linux for
+		// non-checkbox items (systray.go:172, 211).
+		modelHeader := systray.AddMenuItem("Модель", "Выбрать модель Whisper")
+		modelItems = make([]*systray.MenuItem, len(t.actions.ModelLabels))
+		for i, lbl := range t.actions.ModelLabels {
+			checked := i == t.actions.ActiveModelIndex
+			modelItems[i] = modelHeader.AddSubMenuItemCheckbox(lbl, "", checked)
 		}
 	}
-	autostartItem := systray.AddMenuItem("Запускать при логине", "Стартовать Murrly автоматически при входе в систему")
-	if t.actions.IsAutostartOn != nil && t.actions.IsAutostartOn() {
-		autostartItem.Check()
-	}
+	autostartChecked := t.actions.IsAutostartOn != nil && t.actions.IsAutostartOn()
+	autostartItem := systray.AddMenuItemCheckbox("Запускать при логине", "Стартовать Murrly автоматически при входе в систему", autostartChecked)
 	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Завершить Murrly", "Закрыть Murrly")
 
@@ -135,6 +154,14 @@ func (t *Tray) onReady() {
 				systray.SetTooltip("Murrly: " + stateName(s))
 			case items := <-t.transcriptCh:
 				updateTranscriptMenuItems(copyItems, items)
+			case idx := <-t.activeModelCh:
+				for i, item := range modelItems {
+					if i == idx {
+						item.Check()
+					} else {
+						item.Uncheck()
+					}
+				}
 			case <-pauseItem.ClickedCh:
 				if t.actions.OnPauseToggle != nil {
 					t.actions.OnPauseToggle()

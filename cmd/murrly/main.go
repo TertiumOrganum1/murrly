@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/modelinfo"
 	"github.com/tertiumorganum1/murrly/internal/overlay"
 	"github.com/tertiumorganum1/murrly/internal/paster"
+	"github.com/tertiumorganum1/murrly/internal/paths"
 	"github.com/tertiumorganum1/murrly/internal/recorder"
 	"github.com/tertiumorganum1/murrly/internal/transcriber"
 	"github.com/tertiumorganum1/murrly/internal/transcripthistory"
@@ -81,6 +83,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	history := transcripthistory.New(3)
 
+	// Filter the model picker to only models actually downloaded — if
+	// the user has just one, the submenu is hidden entirely (nothing to
+	// pick). Bootstrap with MODELS=all populates all three.
+	presentModelNames, presentModelLabels := presentModels()
+
 	var t *tray.Tray
 	t = tray.New(icons, cfgPath, tray.Actions{
 		OnCopyTranscript: func(index int) {
@@ -107,13 +114,13 @@ func main() {
 			dockmenu.SetAutostart(newState) // keep dock menu in sync
 			return newState
 		},
-		ModelLabels:      buildTrayModelLabels(),
-		ActiveModelIndex: indexOf(modelinfo.Available, cfg.Whisper.Model),
+		ModelLabels:      presentModelLabels,
+		ActiveModelIndex: indexOf(presentModelNames, cfg.Whisper.Model),
 		OnPickModel: func(index int) {
-			if index < 0 || index >= len(modelinfo.Available) {
+			if index < 0 || index >= len(presentModelNames) {
 				return
 			}
-			name := modelinfo.Available[index]
+			name := presentModelNames[index]
 			if err := loader.Reload(name); err != nil {
 				log.Printf("model pick: %v", err)
 				return
@@ -122,6 +129,7 @@ func main() {
 				log.Printf("model pick: persist config: %v", err)
 			}
 			dockmenu.SetActiveModel(index)
+			t.SetActiveModel(index)
 		},
 		OnQuit: cancel,
 	})
@@ -180,10 +188,6 @@ func main() {
 
 	// Dock right-click menu — same actions as the tray menu but reachable
 	// even when the tray icon is hidden behind the notch.
-	modelLabels := make([]string, len(modelinfo.Available))
-	for i, name := range modelinfo.Available {
-		modelLabels[i] = modelinfo.Labels[name]
-	}
 	dockmenu.Install(
 		func(index int) {
 			text, ok := history.Get(index)
@@ -195,10 +199,10 @@ func main() {
 			}
 		},
 		func(index int) {
-			if index < 0 || index >= len(modelinfo.Available) {
+			if index < 0 || index >= len(presentModelNames) {
 				return
 			}
-			name := modelinfo.Available[index]
+			name := presentModelNames[index]
 			if err := loader.Reload(name); err != nil {
 				log.Printf("dock model pick: %v", err)
 				return
@@ -207,6 +211,7 @@ func main() {
 				log.Printf("dock model pick: persist: %v", err)
 			}
 			dockmenu.SetActiveModel(index)
+			t.SetActiveModel(index)
 		},
 		func() {
 			if autostart.Enabled() {
@@ -222,11 +227,11 @@ func main() {
 		},
 		func() { openConfigFile(cfgPath) },
 		func() { cancel(); t.Quit() },
-		modelLabels,
+		presentModelLabels,
 	)
 	// Reflect current state in the menus on startup.
 	dockmenu.SetAutostart(autostart.Enabled())
-	dockmenu.SetActiveModel(indexOf(modelinfo.Available, cfg.Whisper.Model))
+	dockmenu.SetActiveModel(indexOf(presentModelNames, cfg.Whisper.Model))
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -240,12 +245,25 @@ func main() {
 	hk.Stop()
 }
 
-func buildTrayModelLabels() []string {
-	out := make([]string, len(modelinfo.Available))
-	for i, name := range modelinfo.Available {
-		out[i] = modelinfo.Labels[name]
+// presentModels returns the subset of modelinfo.Available whose model
+// file exists on disk under <ModelsDir>/ggml-<name>.bin, plus the
+// matching human-readable labels in the same order. Used to hide
+// missing models from the picker — a user with just large-v3 doesn't
+// see two clickable-but-broken siblings, and a user with one model
+// total sees no picker at all (tray.go hides the "Модель" header
+// when fewer than 2 labels are passed).
+func presentModels() (names []string, labels []string) {
+	dir, err := paths.ModelsDir()
+	if err != nil {
+		return nil, nil
 	}
-	return out
+	for _, name := range modelinfo.Available {
+		if _, err := os.Stat(filepath.Join(dir, "ggml-"+name+".bin")); err == nil {
+			names = append(names, name)
+			labels = append(labels, modelinfo.Labels[name])
+		}
+	}
+	return
 }
 
 // indexOf returns the position of v in s, or -1 if absent.
