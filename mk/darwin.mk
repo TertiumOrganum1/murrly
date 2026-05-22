@@ -3,6 +3,7 @@ BREW_PREFIX := $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
 WHISPER_CMAKE_FLAGS := -DCMAKE_BUILD_TYPE=Release \
                        -DBUILD_SHARED_LIBS=OFF \
                        -DGGML_METAL=ON \
+                       -DGGML_METAL_EMBED_LIBRARY=ON \
                        -DGGML_ACCELERATE=ON
 
 # Search paths picked up by clang/cgo.

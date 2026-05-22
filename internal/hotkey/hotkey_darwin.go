@@ -9,6 +9,7 @@ package hotkey
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	gohotkey "golang.design/x/hotkey"
@@ -56,14 +57,21 @@ func (l *Listener) Events() <-chan Event { return l.events }
 
 // Start registers the hotkey and pipes press/release events to Events().
 // Blocks until Stop is called; intended to be run in its own goroutine.
+//
+// If registration fails (e.g. another app already owns the key), the error is
+// logged and the events channel is closed so consumers ranging over Events()
+// unblock cleanly. Stop() in that case is a no-op.
 func (l *Listener) Start() {
 	if err := l.hk.Register(); err != nil {
+		log.Printf("hotkey: register failed: %v", err)
+		close(l.events)
 		return
 	}
 	for {
 		select {
 		case <-l.stop:
 			_ = l.hk.Unregister()
+			close(l.events)
 			return
 		case <-l.hk.Keydown():
 			l.events <- EventDown
