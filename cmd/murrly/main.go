@@ -5,13 +5,16 @@ import (
 	"embed"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
 	"github.com/tertiumorganum1/murrly/internal/app"
 	"github.com/tertiumorganum1/murrly/internal/clipboard"
 	"github.com/tertiumorganum1/murrly/internal/config"
+	"github.com/tertiumorganum1/murrly/internal/dockmenu"
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
 	"github.com/tertiumorganum1/murrly/internal/logfile"
 	"github.com/tertiumorganum1/murrly/internal/macospermissions"
@@ -98,11 +101,11 @@ func main() {
 			t.SetState(toTrayState(s))
 			switch s {
 			case app.StateRecording:
-				overlay.Show("● Listening…")
+				overlay.Show(icons[tray.StateRecording], "Listening…")
 			case app.StateTranscribing:
-				overlay.Show("⚙ Transcribing…")
+				overlay.Show(icons[tray.StateTranscribing], "Transcribing…")
 			case app.StateError:
-				overlay.Show("✕ Error")
+				overlay.Show(icons[tray.StateError], "Error")
 			default:
 				overlay.Hide()
 			}
@@ -133,6 +136,22 @@ func main() {
 
 	go a.Run(ctx, events)
 
+	// Dock right-click menu — same actions as the tray menu but reachable
+	// even when the tray icon is hidden behind the notch.
+	dockmenu.Install(
+		func() { cancel(); t.Quit() },
+		func() { openConfigFile(cfgPath) },
+		func() {
+			text, ok := history.Get(0)
+			if !ok {
+				return
+			}
+			if err := cb.Set(text); err != nil {
+				log.Printf("dock copy latest: %v", err)
+			}
+		},
+	)
+
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -143,6 +162,19 @@ func main() {
 
 	t.Run() // blocks until systray.Quit() is called
 	hk.Stop()
+}
+
+// openConfigFile opens the config in the user's default text-file handler.
+// macOS: `open path` lets LaunchServices pick the registered .toml handler.
+// Linux: `xdg-open` does the same via the freedesktop standard.
+func openConfigFile(path string) {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "darwin" {
+		cmd = exec.Command("open", path)
+	} else {
+		cmd = exec.Command("xdg-open", path)
+	}
+	_ = cmd.Start()
 }
 
 func setupLogging() func() {
