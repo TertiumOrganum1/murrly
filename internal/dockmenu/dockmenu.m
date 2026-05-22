@@ -1,3 +1,5 @@
+//go:build darwin
+
 #import <Cocoa/Cocoa.h>
 #include "dockmenu.h"
 
