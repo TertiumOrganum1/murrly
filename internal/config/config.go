@@ -41,6 +41,11 @@ type WhisperConfig struct {
 	ComputeType   string `toml:"compute_type"`
 	Language      string `toml:"language"`
 	BeamSize      int    `toml:"beam_size"`
+	// Adaptive — opt-in: short clips use beam_size=1 (greedy), clips
+	// past the long-audio threshold bump to 2 (beam_search). Useful on
+	// macOS where the default beam stays at 1 for speed, but long
+	// dictations would otherwise lose punctuation.
+	Adaptive      bool   `toml:"adaptive"`
 	InitialPrompt string `toml:"initial_prompt"`
 }
 
@@ -64,7 +69,8 @@ func defaults() Config {
 			Device:        "cuda",
 			ComputeType:   "float16",
 			Language:      "",
-			BeamSize:      1, // greedy decode; beam_size>1 is ~5x slower with only marginal accuracy gain on push-to-talk
+			BeamSize:      defaultBeamSize(), // platform-tuned: Linux 2, macOS 1
+			Adaptive:      false,             // opt-in; set true to get short=1 / long=2 dynamic switching
 			InitialPrompt: "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
 		},
 		// PasteDelayMs sits between Set-clipboard / Cmd-V and the Restore-clipboard

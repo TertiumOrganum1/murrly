@@ -16,6 +16,10 @@ type Config struct {
 	ModelPath     string
 	Language      string // "" = auto-detect
 	BeamSize      int
+	// Adaptive: when true, beam dynamically scales with clip length —
+	// short clips use 1 (greedy), long clips bump to longAudioBeamSize.
+	// When false, BeamSize is used unchanged for every call.
+	Adaptive      bool
 	InitialPrompt string
 }
 
@@ -30,17 +34,17 @@ const (
 	// pcmSampleRateHz matches what the recorder feeds us (mono 16 kHz
 	// float32 — Whisper's native sample rate).
 	pcmSampleRateHz = 16000
-	// longAudioThresholdSec — clips longer than this trigger adaptive
-	// beam search. Whisper's encoder window is 30 s; greedy decode
-	// (beam_size=1) starts degrading well before that — it drops
-	// punctuation and capitalisation on long sequences. 25 s leaves
-	// a margin so even ~28 s push-to-talk sessions get the upgrade.
+	// longAudioThresholdSec — clips longer than this are "long" for
+	// the purposes of adaptive beam scaling. Whisper's encoder window
+	// is 30 s and greedy decode (beam_size=1) drops punctuation past
+	// roughly this length.
 	longAudioThresholdSec = 25.0
-	// longAudioBeamSize — beam used for clips past the threshold.
-	// 5 matches upstream whisper-cli's default beam_search mode and
-	// restores punctuation reliably; cost is a few hundred ms extra
-	// on CUDA large-v3 — negligible next to the audio length itself.
-	longAudioBeamSize = 5
+	// shortAudioBeamSize / longAudioBeamSize — beam values when
+	// cfg.Adaptive is true. Going from 1 to 2 already flips the
+	// decoder from greedy to beam_search, which is the main quality
+	// jump; widening further yields little for ~2-3× the cost.
+	shortAudioBeamSize = 1
+	longAudioBeamSize  = 2
 )
 
 // New loads the model into VRAM/GPU memory and allocates the inference
@@ -102,20 +106,21 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Adaptive beam: short clips (typical push-to-talk) keep the cheap
-	// configured beam — usually 1, i.e. greedy decode. Long clips get
-	// bumped to longAudioBeamSize so Whisper stops dropping punctuation
-	// and capitalisation. SetBeamSize on every call is cheap (just
-	// updates a struct field on the cached context).
-	baseBeam := t.cfg.BeamSize
-	if baseBeam < 1 {
-		baseBeam = 1
+	// Beam selection: static (cfg.BeamSize) by default; opt-in adaptive
+	// flips between shortAudio/longAudio sizes based on clip length.
+	// SetBeamSize on every call is cheap — it just updates a field on
+	// the cached context.
+	beam := t.cfg.BeamSize
+	if beam < 1 {
+		beam = 1
 	}
-	beam := baseBeam
-	audioSec := float64(len(pcm)) / float64(pcmSampleRateHz)
-	if audioSec > longAudioThresholdSec && beam < longAudioBeamSize {
-		beam = longAudioBeamSize
-		log.Printf("transcriber: audio %.1fs > %.0fs threshold — beam_size %d→%d", audioSec, longAudioThresholdSec, baseBeam, beam)
+	if t.cfg.Adaptive {
+		audioSec := float64(len(pcm)) / float64(pcmSampleRateHz)
+		if audioSec > longAudioThresholdSec {
+			beam = longAudioBeamSize
+		} else {
+			beam = shortAudioBeamSize
+		}
 	}
 	t.ctx.SetBeamSize(beam)
 

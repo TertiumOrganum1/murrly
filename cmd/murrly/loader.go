@@ -56,6 +56,7 @@ func (l *transcriberLoader) Reload(modelName string) error {
 		ModelPath:     modelPath,
 		Language:      newCfg.Language,
 		BeamSize:      newCfg.BeamSize,
+		Adaptive:      newCfg.Adaptive,
 		InitialPrompt: newCfg.InitialPrompt,
 	})
 	if err != nil {
