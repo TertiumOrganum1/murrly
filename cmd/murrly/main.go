@@ -22,7 +22,7 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/tray"
 )
 
-//go:embed assets/icon-idle.png assets/icon-recording.png assets/icon-transcribing.png assets/icon-error.png
+//go:embed assets/tray/*.png
 var iconFS embed.FS
 
 func main() {
@@ -64,10 +64,10 @@ func main() {
 	cb.RestorePrimary = cfg.Output.RestorePrimary
 
 	icons := map[tray.State][]byte{
-		tray.StateIdle:         mustReadIcon("assets/icon-idle.png"),
-		tray.StateRecording:    mustReadIcon("assets/icon-recording.png"),
-		tray.StateTranscribing: mustReadIcon("assets/icon-transcribing.png"),
-		tray.StateError:        mustReadIcon("assets/icon-error.png"),
+		tray.StateIdle:         mustReadIcon("assets/tray/idle_44.png"),
+		tray.StateRecording:    mustReadIcon("assets/tray/recording_44.png"),
+		tray.StateTranscribing: mustReadIcon("assets/tray/transcribing_44.png"),
+		tray.StateError:        mustReadIcon("assets/tray/error_44.png"),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
