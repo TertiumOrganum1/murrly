@@ -104,7 +104,15 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	}
 	segMs := time.Since(t1).Milliseconds()
 	log.Printf("transcriber: process=%dms segments=%dms", processMs, segMs)
-	return formatSegments(segments), nil
+	// Log the raw joined segments BEFORE post-processing so we can spot
+	// cases where the filters (hallucination removal, spacing fixes,
+	// repeated-word collapsing) accidentally drop a real fragment.
+	raw := strings.Join(segments, " ")
+	formatted := formatSegments(segments)
+	if raw != formatted {
+		log.Printf("transcriber: raw=%q formatted=%q", raw, formatted)
+	}
+	return formatted, nil
 }
 
 func formatSegments(segments []string) string {
