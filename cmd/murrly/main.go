@@ -133,7 +133,7 @@ func main() {
 }
 
 func setupLogging() func() {
-	path, err := logfile.DefaultPath("murrly")
+	path, err := logfile.DefaultPath(logAppName())
 	if err != nil {
 		log.Printf("log path: %v", err)
 		return func() {}
