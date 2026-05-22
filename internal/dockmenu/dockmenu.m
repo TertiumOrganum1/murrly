@@ -9,7 +9,9 @@ typedef void (*mur_void_cb)(void);
     id<NSApplicationDelegate> originalDelegate;
     NSMenu* dockMenu;
     NSMenuItem* copyItems[3];
+    NSMenuItem* autostartItem;
     mur_copy_cb cbCopy;
+    mur_void_cb cbToggleAutostart;
     mur_void_cb cbOpenConfig;
     mur_void_cb cbQuit;
 }
@@ -17,6 +19,7 @@ typedef void (*mur_void_cb)(void);
 - (void)didPickCopy0:(id)sender;
 - (void)didPickCopy1:(id)sender;
 - (void)didPickCopy2:(id)sender;
+- (void)didPickAutostart:(id)sender;
 - (void)didPickOpenConfig:(id)sender;
 - (void)didPickQuit:(id)sender;
 @end
@@ -39,6 +42,7 @@ typedef void (*mur_void_cb)(void);
 - (void)didPickCopy0:(id)sender { if (cbCopy) cbCopy(0); }
 - (void)didPickCopy1:(id)sender { if (cbCopy) cbCopy(1); }
 - (void)didPickCopy2:(id)sender { if (cbCopy) cbCopy(2); }
+- (void)didPickAutostart:(id)sender { if (cbToggleAutostart) cbToggleAutostart(); }
 - (void)didPickOpenConfig:(id)sender { if (cbOpenConfig) cbOpenConfig(); }
 - (void)didPickQuit:(id)sender { if (cbQuit) cbQuit(); }
 
@@ -58,6 +62,7 @@ static NSString* emptySlotTitle(int idx) {
 
 void mur_dockmenu_install(
     void (*onCopyTranscript)(int index),
+    void (*onToggleAutostart)(void),
     void (*onOpenConfig)(void),
     void (*onQuit)(void)
 ) {
@@ -66,6 +71,7 @@ void mur_dockmenu_install(
 
         gMurDelegate = [[MurrlyDockMenuDelegate alloc] init];
         gMurDelegate->cbCopy = onCopyTranscript;
+        gMurDelegate->cbToggleAutostart = onToggleAutostart;
         gMurDelegate->cbOpenConfig = onOpenConfig;
         gMurDelegate->cbQuit = onQuit;
         gMurDelegate->originalDelegate = [NSApp delegate];
@@ -90,6 +96,15 @@ void mur_dockmenu_install(
         }
 
         [menu addItem:[NSMenuItem separatorItem]];
+
+        NSMenuItem* autoItem = [[NSMenuItem alloc]
+            initWithTitle:@"Запускать при логине"
+            action:@selector(didPickAutostart:)
+            keyEquivalent:@""];
+        [autoItem setTarget:gMurDelegate];
+        [autoItem setState:NSControlStateValueOff];
+        [menu addItem:autoItem];
+        gMurDelegate->autostartItem = autoItem;
 
         NSMenuItem* openItem = [[NSMenuItem alloc]
             initWithTitle:@"Открыть конфиг"
@@ -116,6 +131,14 @@ void mur_dockmenu_install(
 static NSString* truncatedPreview(NSString* full, NSUInteger limit) {
     if ([full length] <= limit) return full;
     return [[full substringToIndex:limit] stringByAppendingString:@"…"];
+}
+
+void mur_dockmenu_set_autostart(int enabled) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gMurDelegate || !gMurDelegate->autostartItem) return;
+        [gMurDelegate->autostartItem setState:
+            enabled ? NSControlStateValueOn : NSControlStateValueOff];
+    });
 }
 
 void mur_dockmenu_set_transcripts(const char* latest, const char* previous, const char* older) {

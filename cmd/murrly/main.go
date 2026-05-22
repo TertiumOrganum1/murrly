@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tertiumorganum1/murrly/internal/app"
+	"github.com/tertiumorganum1/murrly/internal/autostart"
 	"github.com/tertiumorganum1/murrly/internal/clipboard"
 	"github.com/tertiumorganum1/murrly/internal/config"
 	"github.com/tertiumorganum1/murrly/internal/dockmenu"
@@ -88,6 +89,21 @@ func main() {
 				log.Printf("copy transcript %d: %v", index, err)
 			}
 		},
+		IsAutostartOn: autostart.Enabled,
+		OnToggleAutostart: func() bool {
+			if autostart.Enabled() {
+				if err := autostart.Disable(); err != nil {
+					log.Printf("autostart disable: %v", err)
+				}
+			} else {
+				if err := autostart.Enable(); err != nil {
+					log.Printf("autostart enable: %v", err)
+				}
+			}
+			newState := autostart.Enabled()
+			dockmenu.SetAutostart(newState) // keep dock menu in sync
+			return newState
+		},
 		OnQuit: cancel,
 	})
 
@@ -155,9 +171,23 @@ func main() {
 				log.Printf("dock copy transcript %d: %v", index, err)
 			}
 		},
+		func() {
+			if autostart.Enabled() {
+				if err := autostart.Disable(); err != nil {
+					log.Printf("autostart disable: %v", err)
+				}
+			} else {
+				if err := autostart.Enable(); err != nil {
+					log.Printf("autostart enable: %v", err)
+				}
+			}
+			dockmenu.SetAutostart(autostart.Enabled())
+		},
 		func() { openConfigFile(cfgPath) },
 		func() { cancel(); t.Quit() },
 	)
+	// Reflect current Login Item state in the menu checkmark on startup.
+	dockmenu.SetAutostart(autostart.Enabled())
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)

@@ -12,6 +12,7 @@ package dockmenu
 #include "dockmenu.h"
 
 extern void murGoCopy(int index);
+extern void murGoToggleAutostart(void);
 extern void murGoOpenConfig(void);
 extern void murGoQuit(void);
 */
@@ -23,23 +24,25 @@ import (
 )
 
 var (
-	cbMu         sync.Mutex
-	cbCopy       func(int)
-	cbOpenConfig func()
-	cbQuit       func()
+	cbMu              sync.Mutex
+	cbCopy            func(int)
+	cbToggleAutostart func()
+	cbOpenConfig      func()
+	cbQuit            func()
 )
 
 // Install registers callbacks for the Dock menu actions. Must be called
-// after NSApp exists (any time during program lifetime is fine —
-// internally we dispatch onto the main thread).
-func Install(onCopy func(int), onOpenConfig, onQuit func()) {
+// after NSApp exists.
+func Install(onCopy func(int), onToggleAutostart, onOpenConfig, onQuit func()) {
 	cbMu.Lock()
 	cbCopy = onCopy
+	cbToggleAutostart = onToggleAutostart
 	cbOpenConfig = onOpenConfig
 	cbQuit = onQuit
 	cbMu.Unlock()
 	C.mur_dockmenu_install(
 		(*[0]byte)(C.murGoCopy),
+		(*[0]byte)(C.murGoToggleAutostart),
 		(*[0]byte)(C.murGoOpenConfig),
 		(*[0]byte)(C.murGoQuit),
 	)
@@ -57,6 +60,16 @@ func SetTranscripts(latest, previous, older string) {
 	C.mur_dockmenu_set_transcripts(cLatest, cPrev, cOlder)
 }
 
+// SetAutostart updates the checkmark next to the "Запускать при логине"
+// item to reflect the current Login Item state.
+func SetAutostart(enabled bool) {
+	v := C.int(0)
+	if enabled {
+		v = 1
+	}
+	C.mur_dockmenu_set_autostart(v)
+}
+
 //export murGoCopy
 func murGoCopy(index C.int) {
 	cbMu.Lock()
@@ -64,6 +77,16 @@ func murGoCopy(index C.int) {
 	cbMu.Unlock()
 	if cb != nil {
 		cb(int(index))
+	}
+}
+
+//export murGoToggleAutostart
+func murGoToggleAutostart() {
+	cbMu.Lock()
+	cb := cbToggleAutostart
+	cbMu.Unlock()
+	if cb != nil {
+		cb()
 	}
 }
 

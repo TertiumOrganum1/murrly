@@ -20,11 +20,13 @@ const (
 )
 
 type Actions struct {
-	OnPauseToggle    func()
-	OnReload         func()
-	OnOpenConfig     func()
-	OnCopyTranscript func(index int)
-	OnQuit           func()
+	OnPauseToggle     func()
+	OnReload          func()
+	OnOpenConfig      func()
+	OnCopyTranscript  func(index int)
+	OnToggleAutostart func() bool // returns the new state after toggling
+	IsAutostartOn     func() bool
+	OnQuit            func()
 }
 
 type Tray struct {
@@ -91,6 +93,11 @@ func (t *Tray) onReady() {
 		item.Disable()
 	}
 	systray.AddSeparator()
+	autostartItem := systray.AddMenuItem("Запускать при логине", "Стартовать Murrly автоматически при входе в систему")
+	if t.actions.IsAutostartOn != nil && t.actions.IsAutostartOn() {
+		autostartItem.Check()
+	}
+	systray.AddSeparator()
 	quitItem := systray.AddMenuItem("Завершить Murrly", "Закрыть Murrly")
 
 	go func() {
@@ -119,6 +126,14 @@ func (t *Tray) onReady() {
 				t.copyTranscript(1)
 			case <-copyOlderItem.ClickedCh:
 				t.copyTranscript(2)
+			case <-autostartItem.ClickedCh:
+				if t.actions.OnToggleAutostart != nil {
+					if t.actions.OnToggleAutostart() {
+						autostartItem.Check()
+					} else {
+						autostartItem.Uncheck()
+					}
+				}
 			case <-quitItem.ClickedCh:
 				if t.actions.OnQuit != nil {
 					t.actions.OnQuit()
