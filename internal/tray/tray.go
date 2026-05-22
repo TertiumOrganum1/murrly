@@ -78,20 +78,20 @@ func (t *Tray) onReady() {
 		systray.SetIcon(icon)
 	}
 
-	pauseItem := systray.AddMenuItem("Pause", "Stop listening for hotkey")
-	reloadItem := systray.AddMenuItem("Reload config", "Reload config from disk")
-	openCfgItem := systray.AddMenuItem("Open config file", "Open config.toml in $EDITOR or xdg-open")
+	pauseItem := systray.AddMenuItem("Пауза", "Приостановить слушать hotkey")
+	reloadItem := systray.AddMenuItem("Перезагрузить конфиг", "Перечитать config.toml")
+	openCfgItem := systray.AddMenuItem("Открыть конфиг", "Открыть config.toml")
 	systray.AddSeparator()
-	copyLatestItem := systray.AddMenuItem("Copy latest recognized text", "Copy the latest recognized text to clipboard")
-	copyPreviousItem := systray.AddMenuItem("Copy previous recognized text", "Copy the previous recognized text to clipboard")
-	copyOlderItem := systray.AddMenuItem("Copy older recognized text", "Copy the third latest recognized text to clipboard")
+	copyLatestItem := systray.AddMenuItem("— (последнее)", "Скопировать в буфер обмена")
+	copyPreviousItem := systray.AddMenuItem("— (предыдущее)", "Скопировать в буфер обмена")
+	copyOlderItem := systray.AddMenuItem("— (ещё раньше)", "Скопировать в буфер обмена")
 	copyItems := []*systray.MenuItem{copyLatestItem, copyPreviousItem, copyOlderItem}
 	for i, item := range copyItems {
 		item.SetTitle(transcriptMenuTitle(i, ""))
 		item.Disable()
 	}
 	systray.AddSeparator()
-	quitItem := systray.AddMenuItem("Quit", "Stop Murrly")
+	quitItem := systray.AddMenuItem("Завершить Murrly", "Закрыть Murrly")
 
 	go func() {
 		for {
@@ -167,19 +167,20 @@ func updateTranscriptMenuItems(menuItems []*systray.MenuItem, transcripts []stri
 }
 
 func transcriptMenuTitle(index int, text string) string {
-	labels := []string{
-		"Copy latest",
-		"Copy previous",
-		"Copy older",
-	}
-	label := "Copy recognized text"
-	if index >= 0 && index < len(labels) {
-		label = labels[index]
+	emptyLabels := []string{
+		"— (последнее)",
+		"— (предыдущее)",
+		"— (ещё раньше)",
 	}
 	if text == "" {
-		return label
+		if index >= 0 && index < len(emptyLabels) {
+			return emptyLabels[index]
+		}
+		return "— (пусто)"
 	}
-	return label + ": " + transcriptPreview(text, 48)
+	// Show just the transcript fragment — clipboard semantics are obvious
+	// from the menu's context.
+	return transcriptPreview(text, 56)
 }
 
 func transcriptPreview(text string, limit int) string {

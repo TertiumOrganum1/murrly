@@ -46,11 +46,12 @@ typedef void (*mur_void_cb)(void);
 
 static MurrlyDockMenuDelegate* gMurDelegate = nil;
 
-static NSString* defaultCopyTitle(int idx) {
+// Placeholder shown when no transcript exists for that slot yet.
+static NSString* emptySlotTitle(int idx) {
     switch (idx) {
-        case 0: return @"Copy latest recognized text";
-        case 1: return @"Copy previous recognized text";
-        case 2: return @"Copy older recognized text";
+        case 0: return @"— (последнее)";
+        case 1: return @"— (предыдущее)";
+        case 2: return @"— (ещё раньше)";
         default: return @"";
     }
 }
@@ -79,7 +80,7 @@ void mur_dockmenu_install(
         };
         for (int i = 0; i < 3; i++) {
             NSMenuItem* it = [[NSMenuItem alloc]
-                initWithTitle:defaultCopyTitle(i)
+                initWithTitle:emptySlotTitle(i)
                 action:copySelectors[i]
                 keyEquivalent:@""];
             [it setTarget:gMurDelegate];
@@ -91,7 +92,7 @@ void mur_dockmenu_install(
         [menu addItem:[NSMenuItem separatorItem]];
 
         NSMenuItem* openItem = [[NSMenuItem alloc]
-            initWithTitle:@"Open config file"
+            initWithTitle:@"Открыть конфиг"
             action:@selector(didPickOpenConfig:)
             keyEquivalent:@""];
         [openItem setTarget:gMurDelegate];
@@ -100,7 +101,7 @@ void mur_dockmenu_install(
         [menu addItem:[NSMenuItem separatorItem]];
 
         NSMenuItem* quitItem = [[NSMenuItem alloc]
-            initWithTitle:@"Quit Murrly"
+            initWithTitle:@"Завершить Murrly"
             action:@selector(didPickQuit:)
             keyEquivalent:@""];
         [quitItem setTarget:gMurDelegate];
@@ -125,12 +126,12 @@ void mur_dockmenu_set_transcripts(const char* latest, const char* previous, cons
         if (inputs[i] && inputs[i][0] != '\0') {
             NSString* text = [NSString stringWithUTF8String:inputs[i]];
             NSString* clean = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            NSString* base = defaultCopyTitle(i);
-            NSString* preview = truncatedPreview(clean, 48);
-            [titles addObject:[NSString stringWithFormat:@"%@: %@", base, preview]];
+            // Show the transcript fragment alone — clipboard semantics are
+            // obvious from context and the user asked for fragments only.
+            [titles addObject:truncatedPreview(clean, 56)];
             [enabledFlags addObject:@YES];
         } else {
-            [titles addObject:defaultCopyTitle(i)];
+            [titles addObject:emptySlotTitle(i)];
             [enabledFlags addObject:@NO];
         }
     }
