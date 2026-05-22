@@ -56,7 +56,7 @@ func (l *transcriberLoader) Reload(modelName string) error {
 		ModelPath:     modelPath,
 		Language:      newCfg.Language,
 		BeamSize:      newCfg.BeamSize,
-		Adaptive:      newCfg.Adaptive,
+		BeamAdaptive:  newCfg.BeamAdaptive,
 		InitialPrompt: newCfg.InitialPrompt,
 	})
 	if err != nil {
@@ -89,7 +89,7 @@ func (l *transcriberLoader) ReloadConfig(cfgPath string) error {
 		ModelPath:     cfg.Whisper.ModelPath,
 		Language:      cfg.Whisper.Language,
 		BeamSize:      cfg.Whisper.BeamSize,
-		Adaptive:      cfg.Whisper.Adaptive,
+		BeamAdaptive:  cfg.Whisper.BeamAdaptive,
 		InitialPrompt: cfg.Whisper.InitialPrompt,
 	})
 	if err != nil {

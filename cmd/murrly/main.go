@@ -73,7 +73,7 @@ func main() {
 		ModelPath:     cfg.Whisper.ModelPath,
 		Language:      cfg.Whisper.Language,
 		BeamSize:      cfg.Whisper.BeamSize,
-		Adaptive:      cfg.Whisper.Adaptive,
+		BeamAdaptive:  cfg.Whisper.BeamAdaptive,
 		InitialPrompt: cfg.Whisper.InitialPrompt,
 	})
 	if err != nil {

@@ -41,11 +41,13 @@ type WhisperConfig struct {
 	ComputeType   string `toml:"compute_type"`
 	Language      string `toml:"language"`
 	BeamSize      int    `toml:"beam_size"`
-	// Adaptive — opt-in: short clips use beam_size=1 (greedy), clips
-	// past the long-audio threshold bump to 2 (beam_search). Useful on
-	// macOS where the default beam stays at 1 for speed, but long
-	// dictations would otherwise lose punctuation.
-	Adaptive      bool   `toml:"adaptive"`
+	// BeamAdaptive — opt-in: short clips use beam_size=1 (effectively
+	// greedy), clips past the long-audio threshold use the upstream
+	// beam_search default of 5. Useful on macOS where the configured
+	// beam stays at 1 for speed, but long dictations would otherwise
+	// risk losing punctuation. Visible in the default config so users
+	// know the knob exists.
+	BeamAdaptive  bool   `toml:"beam_adaptive"`
 	InitialPrompt string `toml:"initial_prompt"`
 }
 
@@ -69,8 +71,8 @@ func defaults() Config {
 			Device:        "cuda",
 			ComputeType:   "float16",
 			Language:      "",
-			BeamSize:      defaultBeamSize(), // platform-tuned: Linux 2, macOS 1
-			Adaptive:      false,             // opt-in; set true to get short=1 / long=2 dynamic switching
+			BeamSize:      defaultBeamSize(), // platform-tuned: Linux 5, macOS 1
+			BeamAdaptive:  false,             // opt-in; set true to get short=1 / long=5 dynamic switching
 			InitialPrompt: "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
 		},
 		// PasteDelayMs sits between Set-clipboard / Cmd-V and the Restore-clipboard

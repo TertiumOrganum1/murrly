@@ -16,10 +16,11 @@ type Config struct {
 	ModelPath     string
 	Language      string // "" = auto-detect
 	BeamSize      int
-	// Adaptive: when true, beam dynamically scales with clip length —
-	// short clips use 1 (greedy), long clips bump to longAudioBeamSize.
-	// When false, BeamSize is used unchanged for every call.
-	Adaptive      bool
+	// BeamAdaptive: when true, beam dynamically scales with clip length —
+	// short clips use 1 (effectively greedy), long clips bump to
+	// longAudioBeamSize. When false, BeamSize is used unchanged for
+	// every call.
+	BeamAdaptive  bool
 	InitialPrompt string
 }
 
@@ -40,9 +41,9 @@ const (
 	// roughly this length.
 	longAudioThresholdSec = 25.0
 	// shortAudioBeamSize / longAudioBeamSize — beam values when
-	// cfg.Adaptive is true. Short clips use width 1 (effectively
+	// cfg.BeamAdaptive is true. Short clips use width 1 (effectively
 	// greedy — fastest); long clips bump to 5 (upstream whisper-cli
-	// default). 5 is what empirically restores punctuation on long
+	// default). 5 is what empirically restored punctuation on long
 	// dictations — narrower widths (2-3) turned out insufficient.
 	shortAudioBeamSize = 1
 	longAudioBeamSize  = 5
@@ -85,6 +86,15 @@ func New(cfg Config) (*Transcriber, error) {
 	if cfg.BeamSize > 0 {
 		ctx.SetBeamSize(cfg.BeamSize)
 	}
+	// Force deterministic decode and disable Whisper's temperature
+	// fallback. Whisper retries each chunk at T=0.0, 0.2, 0.4, … 1.0
+	// when its quality checks (entropy / logprob / compression ratio)
+	// trip; high-temperature outputs are the ones that come back
+	// lowercase with no punctuation. Pinning T=0 with beam_search keeps
+	// the decoder in the only mode we want. -1 disables fallback per
+	// the binding's documented contract.
+	ctx.SetTemperature(0)
+	ctx.SetTemperatureFallback(-1)
 	if cfg.InitialPrompt != "" {
 		ctx.SetInitialPrompt(cfg.InitialPrompt)
 	}
@@ -115,7 +125,7 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	if beam < 1 {
 		beam = 1
 	}
-	if t.cfg.Adaptive {
+	if t.cfg.BeamAdaptive {
 		audioSec := float64(len(pcm)) / float64(pcmSampleRateHz)
 		if audioSec > longAudioThresholdSec {
 			beam = longAudioBeamSize
