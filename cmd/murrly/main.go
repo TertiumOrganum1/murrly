@@ -14,6 +14,7 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/config"
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
 	"github.com/tertiumorganum1/murrly/internal/logfile"
+	"github.com/tertiumorganum1/murrly/internal/macospermissions"
 	"github.com/tertiumorganum1/murrly/internal/paster"
 	"github.com/tertiumorganum1/murrly/internal/recorder"
 	"github.com/tertiumorganum1/murrly/internal/transcriber"
@@ -37,6 +38,10 @@ func main() {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+
+	if !macospermissions.EnsureAccessibility() {
+		log.Printf("accessibility: not granted yet — paste will not work until you enable Murrly in System Settings → Privacy & Security → Accessibility")
 	}
 
 	if err := recorder.InitPortAudio(); err != nil {
