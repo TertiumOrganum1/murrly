@@ -3,6 +3,7 @@
 /third_party/
 /models/
 /.icon-pack-staging/
+/docs/superpowers/
 *.o
 *.a
 *.log
