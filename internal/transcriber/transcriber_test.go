@@ -1,6 +1,7 @@
 package transcriber
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -186,6 +187,87 @@ func TestFormatSegmentsCollapsesTinyRepeatedSentences(t *testing.T) {
 func TestFormatSegmentsCollapsesNestedRepeatsInTwoPasses(t *testing.T) {
 	got := formatSegments([]string{"А Б А Б В А Б А Б В"})
 	want := "А Б В. "
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// Integration test: feed the verbatim Whisper raw output from the
+// user's actual stutter case (murrly.log 2026/05/24 01:01:58) and
+// assert the pipeline produces a sane result — one copy of the long
+// repeated sentence, plus the unique tail. This exercises the
+// interaction of three filters: collapseRepeatedBlocks (catches the
+// consecutive runs AND folds an A_double chunk back into a single
+// A by collapsing its internal "В общем суть в том ..." duplication),
+// stripFillerBetweenCommas (drops the leading "В общем,"), and
+// dedupeSubstantialSentences (any A copy that survives the
+// consecutive-block pass).
+func TestFormatSegmentsHandlesRealStutterFromLog(t *testing.T) {
+	raw := "Слушай, я диктовал текст, вот последний мой, ну предпоследний получается, учитывая эту реплику, и как будто бы очень много в конце было удалено, ну то есть как будто бы, я не знаю. " +
+		"В общем, посмотри влоги, предпоследнюю реплику, приведи мне сюда ее, ну или знаешь, скажи мне, где лог находится, я сам гляну. " +
+		// 7 consecutive A's
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		// A_double — Whisper inserted a fragment between copies without a period
+		"В общем, суть в том, что надо выяснить, это В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		// 6 more A's
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		// A_double again
+		"В общем, суть в том, что надо выяснить, это В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		// 6 more A's
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+		// unique final
+		"В общем, суть в том, что надо выяснить, это которые я не говорил, и потом того, что я говорил, дальше нет."
+	got := formatSegments([]string{raw})
+	fullCount := strings.Count(got, "наши фильтры так все урезают, что в итоге я не вижу.")
+	if fullCount != 1 {
+		t.Errorf("expected exactly 1 copy of the long A sentence, got %d:\n%s", fullCount, got)
+	}
+	if !strings.Contains(got, "которые я не говорил, и потом того, что я говорил, дальше нет.") {
+		t.Errorf("missing unique final sentence: %s", got)
+	}
+}
+
+// Whisper sometimes loops on a long sentence with short fragments
+// interleaved between copies — that breaks consecutive-block
+// detection but dedupeSubstantialSentences catches the dupes by
+// normalised form across the whole text.
+func TestFormatSegmentsDedupesNonConsecutiveLongRepeats(t *testing.T) {
+	got := formatSegments([]string{
+		"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+			"В общем, суть в том, что надо выяснить, это В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+			"В общем, суть в том, что надо выяснить, это наши фильтры так все урезают, что в итоге я не вижу. " +
+			"В общем, суть в том, что надо выяснить, это которые я не говорил.",
+	})
+	// The long "наши фильтры…" sentence appears 3 times by normalised
+	// form; we keep only the first. The fragments still pass through
+	// because they're below the minimum-word threshold OR uniquely
+	// shaped.
+	if strings.Count(got, "наши фильтры так все урезают, что в итоге я не вижу.") > 1 {
+		t.Fatalf("expected long sentence collapsed to one copy, got: %q", got)
+	}
+}
+
+// Short sentences (under the dedupeSubstantialMinWords threshold)
+// can recur naturally — don't aggressively dedupe.
+func TestFormatSegmentsKeepsShortRepeatingSentences(t *testing.T) {
+	got := formatSegments([]string{"Понял всё. Сделаю. Понял всё. Уже работаю."})
+	want := "Понял всё. Сделаю. Понял всё. Уже работаю. "
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

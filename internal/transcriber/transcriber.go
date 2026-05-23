@@ -299,9 +299,15 @@ const (
 //     → "Поэтому, давай") → drop the clause and its commas. Catches
 //     fillers that survive stage 5 because they were already inside
 //     a multi-clause sentence.
-//  7. addSentenceSpacing:           existing rule — insert a space
+//  7. dedupeSubstantialSentences:    catch sentence-level Whisper
+//     loops that broke up across short fragments and slipped past
+//     stage 3's consecutive-block detection. Drops any sentence
+//     (5+ words) that appears more than once in the text, keeping
+//     the first occurrence. Short sentences like "Да." are left
+//     alone — they can legitimately recur.
+//  8. addSentenceSpacing:           existing rule — insert a space
 //     after .!? where Whisper omitted it ("предложение.второе?Третье!").
-//  8. capitalizeAfterSentenceTerminators: capitalise the very first
+//  9. capitalizeAfterSentenceTerminators: capitalise the very first
 //     letter of the output and the first letter following any . / !
 //     / ? + whitespace. Whisper occasionally forgets caps on
 //     legitimate sentence starts, and stripFillerBetweenCommas can
@@ -312,7 +318,7 @@ const (
 //     whitespace between the terminator and the next letter — so
 //     "github.com" / "Node.js" aren't disturbed. Runs after
 //     addSentenceSpacing so spaces are already in place.
-//  9. finalizeTerminalPunctuation:  strip trailing ,/;/: and ensure
+// 10. finalizeTerminalPunctuation:  strip trailing ,/;/: and ensure
 //     the text ends with . / ! / ?, then a trailing space (for paste-
 //     time concatenation against following text).
 func formatSegments(segments []string) string {
@@ -334,6 +340,7 @@ func formatSegments(segments []string) string {
 	text = joinSingleWordSentenceRuns(text)
 	text = stripFillerOnlySentences(text)
 	text = stripFillerBetweenCommas(text)
+	text = dedupeSubstantialSentences(text)
 	text = addSentenceSpacing(text)
 	text = capitalizeAfterSentenceTerminators(text)
 	text = finalizeTerminalPunctuation(text)
@@ -823,6 +830,50 @@ func dropFillerClauses(chunk string) (string, bool) {
 	// cleaner to drop it here.
 	rejoined = strings.TrimLeft(rejoined, " ")
 	return rejoined + trailing, true
+}
+
+// dedupeSubstantialSentences scans the sentence chunks of the text
+// and drops any that has already appeared earlier with the same
+// normalised form. Only "substantial" sentences (5+ word-tokens
+// after normalisation) are deduplicated — short ones like "Да."
+// or "Хорошо." can legitimately recur.
+//
+// collapseRepeatedBlocks (stage 3 of the pipeline) handles the
+// usual Whisper stutter where the same sentence repeats N times in
+// a row. But sometimes the loop emits a different short fragment
+// between copies — that breaks the consecutive-block detection,
+// and we end up with [A, frag, A, frag, A, final] where A is the
+// same long sentence each time. This pass catches those: any A
+// after the first instance is dropped.
+const dedupeSubstantialMinWords = 5
+
+func dedupeSubstantialSentences(text string) string {
+	chunks := sentenceChunks(text)
+	if len(chunks) < 2 {
+		return text
+	}
+	seen := make(map[string]bool)
+	var sb strings.Builder
+	changed := false
+	for _, chunk := range chunks {
+		key := normalizeHallucinationKey(chunk)
+		if key == "" {
+			sb.WriteString(chunk)
+			continue
+		}
+		if len(strings.Fields(key)) >= dedupeSubstantialMinWords {
+			if seen[key] {
+				changed = true
+				continue
+			}
+			seen[key] = true
+		}
+		sb.WriteString(chunk)
+	}
+	if !changed {
+		return text
+	}
+	return sb.String()
 }
 
 // capitalizeAfterSentenceTerminators flips the first letter of the
