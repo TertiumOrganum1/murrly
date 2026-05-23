@@ -107,8 +107,11 @@ func (t *Transcriber) Close() error {
 	return t.model.Close()
 }
 
-// Transcribe runs inference on a mono 16 kHz float32 PCM buffer and returns
-// the recognized text.
+// Transcribe runs inference on a mono 16 kHz float32 PCM buffer and
+// returns the recognized text. If the first pass produces output that
+// looks like Whisper's high-temperature fallback (many words, no
+// punctuation, no uppercase), it retries once with a wider beam — the
+// wider search sometimes pulls the decoder out of the lowercase trap.
 func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	if len(pcm) == 0 {
 		return "", nil
@@ -117,10 +120,41 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Beam selection: static (cfg.BeamSize) by default; opt-in adaptive
-	// flips between shortAudio/longAudio sizes based on clip length.
-	// SetBeamSize on every call is cheap — it just updates a field on
-	// the cached context.
+	beam := t.chooseBeam(pcm)
+	text, err := t.transcribeOnce(pcm, beam)
+	if err != nil {
+		return "", err
+	}
+	if !looksLikeFastMode(text) {
+		return text, nil
+	}
+
+	// Even with SetTemperatureFallback(-1) Whisper occasionally
+	// produces all-lowercase, punctuation-free output — likely the
+	// decoder gets stuck in a local minimum on certain audio. A wider
+	// beam reshuffles the search and usually breaks out of it.
+	retryBeam := beam + 3
+	if retryBeam > 10 {
+		retryBeam = 10
+	}
+	log.Printf("transcriber: fast-mode output detected (words=%d, no punct/caps); retry beam %d→%d", len(strings.Fields(text)), beam, retryBeam)
+	retry, err := t.transcribeOnce(pcm, retryBeam)
+	if err != nil {
+		// Retry blew up — keep the original (formatted-poorly is
+		// still better than empty).
+		return text, nil
+	}
+	if looksLikeFastMode(retry) {
+		log.Printf("transcriber: retry beam=%d still fast-mode; keeping first result", retryBeam)
+		return text, nil
+	}
+	log.Printf("transcriber: retry recovered formatting")
+	return retry, nil
+}
+
+// chooseBeam picks the beam_size for this clip based on configuration
+// (static cfg.BeamSize, or BeamAdaptive's short/long split).
+func (t *Transcriber) chooseBeam(pcm []float32) int {
 	beam := t.cfg.BeamSize
 	if beam < 1 {
 		beam = 1
@@ -133,6 +167,12 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 			beam = shortAudioBeamSize
 		}
 	}
+	return beam
+}
+
+// transcribeOnce runs whisper once with the given beam_size and
+// returns the post-processed text. Caller holds t.mu.
+func (t *Transcriber) transcribeOnce(pcm []float32, beam int) (string, error) {
 	t.ctx.SetBeamSize(beam)
 
 	t0 := time.Now()
@@ -153,7 +193,7 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 		}
 	}
 	segMs := time.Since(t1).Milliseconds()
-	log.Printf("transcriber: process=%dms segments=%dms", processMs, segMs)
+	log.Printf("transcriber: process=%dms segments=%dms beam=%d", processMs, segMs, beam)
 	// Log the raw joined segments BEFORE post-processing so we can spot
 	// cases where the filters (hallucination removal, spacing fixes,
 	// repeated-word collapsing) accidentally drop a real fragment.
@@ -164,6 +204,32 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	}
 	return formatted, nil
 }
+
+// looksLikeFastMode heuristically detects whisper's degraded
+// high-temperature output: many words, but no sentence punctuation
+// and no uppercase anywhere. Short utterances ("привет, как дела")
+// can legitimately have no caps/punct, so we require >= 20 words
+// before declaring fast-mode.
+func looksLikeFastMode(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	if len(strings.Fields(text)) < fastModeMinWords {
+		return false
+	}
+	for _, r := range text {
+		if unicode.IsUpper(r) {
+			return false
+		}
+		if r == '.' || r == '!' || r == '?' {
+			return false
+		}
+	}
+	return true
+}
+
+const fastModeMinWords = 20
 
 func formatSegments(segments []string) string {
 	// The whisper.cpp Go binding trims each segment, so preserve boundaries here.
