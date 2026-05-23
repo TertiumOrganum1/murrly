@@ -109,9 +109,12 @@ func (t *Transcriber) Close() error {
 
 // Transcribe runs inference on a mono 16 kHz float32 PCM buffer and
 // returns the recognized text. If the first pass produces output that
-// looks like Whisper's high-temperature fallback (many words, no
-// punctuation, no uppercase), it retries once with a wider beam — the
-// wider search sometimes pulls the decoder out of the lowercase trap.
+// looks like Whisper's degraded fast-mode output (long enough but no
+// punctuation, no uppercase), it retries up to fastModeMaxRetries
+// times with progressively more leading silence prepended. Shifting
+// the audio's chunk-boundary alignment is enough perturbation to nudge
+// the decoder onto a different search path — wider beam alone isn't,
+// because beam_search at T=0 is deterministic.
 func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	if len(pcm) == 0 {
 		return "", nil
@@ -121,35 +124,35 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 	defer t.mu.Unlock()
 
 	beam := t.chooseBeam(pcm)
-	text, err := t.transcribeOnce(pcm, beam)
+	firstResult, err := t.transcribeOnce(pcm, beam)
 	if err != nil {
 		return "", err
 	}
-	if !looksLikeFastMode(text) {
-		return text, nil
+	if !looksLikeFastMode(firstResult) {
+		return firstResult, nil
 	}
 
-	// Even with SetTemperatureFallback(-1) Whisper occasionally
-	// produces all-lowercase, punctuation-free output — likely the
-	// decoder gets stuck in a local minimum on certain audio. A wider
-	// beam reshuffles the search and usually breaks out of it.
-	retryBeam := beam + 3
-	if retryBeam > 10 {
-		retryBeam = 10
+	silentSamples := int(fastModeSilencePadSec * pcmSampleRateHz)
+	paddedPcm := pcm
+	for attempt := 1; attempt <= fastModeMaxRetries; attempt++ {
+		// Each iteration prepends another half-second of zero
+		// samples — by attempt 2 the audio carries a full second
+		// of silence in front.
+		paddedPcm = append(make([]float32, silentSamples), paddedPcm...)
+		totalSilence := fastModeSilencePadSec * float64(attempt)
+		log.Printf("transcriber: fast-mode output (words=%d, no punct/caps); retry %d/%d with %.1fs leading silence", len(strings.Fields(firstResult)), attempt, fastModeMaxRetries, totalSilence)
+		retry, err := t.transcribeOnce(paddedPcm, beam)
+		if err != nil {
+			log.Printf("transcriber: retry %d failed: %v — keeping first result", attempt, err)
+			return firstResult, nil
+		}
+		if !looksLikeFastMode(retry) {
+			log.Printf("transcriber: retry %d recovered formatting", attempt)
+			return retry, nil
+		}
 	}
-	log.Printf("transcriber: fast-mode output detected (words=%d, no punct/caps); retry beam %d→%d", len(strings.Fields(text)), beam, retryBeam)
-	retry, err := t.transcribeOnce(pcm, retryBeam)
-	if err != nil {
-		// Retry blew up — keep the original (formatted-poorly is
-		// still better than empty).
-		return text, nil
-	}
-	if looksLikeFastMode(retry) {
-		log.Printf("transcriber: retry beam=%d still fast-mode; keeping first result", retryBeam)
-		return text, nil
-	}
-	log.Printf("transcriber: retry recovered formatting")
-	return retry, nil
+	log.Printf("transcriber: all %d retries still fast-mode; keeping first result", fastModeMaxRetries)
+	return firstResult, nil
 }
 
 // chooseBeam picks the beam_size for this clip based on configuration
@@ -206,10 +209,10 @@ func (t *Transcriber) transcribeOnce(pcm []float32, beam int) (string, error) {
 }
 
 // looksLikeFastMode heuristically detects whisper's degraded
-// high-temperature output: many words, but no sentence punctuation
-// and no uppercase anywhere. Short utterances ("привет, как дела")
-// can legitimately have no caps/punct, so we require >= 20 words
-// before declaring fast-mode.
+// high-temperature output: a long-ish run of words with no sentence
+// punctuation and no uppercase anywhere. Short utterances
+// ("привет, как дела") can legitimately have no caps/punct, so the
+// threshold filters those out.
 func looksLikeFastMode(text string) bool {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -229,7 +232,11 @@ func looksLikeFastMode(text string) bool {
 	return true
 }
 
-const fastModeMinWords = 20
+const (
+	fastModeMinWords      = 15
+	fastModeMaxRetries    = 2
+	fastModeSilencePadSec = 0.5
+)
 
 func formatSegments(segments []string) string {
 	// The whisper.cpp Go binding trims each segment, so preserve boundaries here.
