@@ -51,7 +51,14 @@ type Config struct {
 	Paster       Paster
 	OnState      func(State)
 	OnTranscript func(string)
-	PasteDelay   time.Duration
+	// AdjustText is an optional last-mile hook applied after the
+	// transcriber finishes filtering and before the text reaches the
+	// clipboard. It exists for context-aware adjustments — e.g. read
+	// the focused UI element's surroundings and adapt casing /
+	// leading whitespace / terminator. Returning the input unchanged
+	// is a valid no-op (and the default when AdjustText is nil).
+	AdjustText func(string) string
+	PasteDelay time.Duration
 }
 
 type App struct {
@@ -123,8 +130,18 @@ func (a *App) finish() {
 		a.setState(StateIdle)
 		return
 	}
+	// History/tray sees the canonical recognised text (before the
+	// context-aware tweaks) — those are insertion-point specific and
+	// would just clutter the recent-transcripts menu with a leading
+	// space etc.
 	if a.cfg.OnTranscript != nil {
 		a.cfg.OnTranscript(text)
+	}
+	if a.cfg.AdjustText != nil {
+		// AdjustText handles its own logging — it has the AX-status
+		// detail (which lookup step succeeded, what preceding char
+		// was returned) that we'd be lying about here without context.
+		text = a.cfg.AdjustText(text)
 	}
 
 	saved, err := a.cfg.Clipboard.Save()

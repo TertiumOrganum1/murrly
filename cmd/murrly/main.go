@@ -28,6 +28,15 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/transcriber"
 	"github.com/tertiumorganum1/murrly/internal/transcripthistory"
 	"github.com/tertiumorganum1/murrly/internal/tray"
+	// internal/uicontext intentionally not wired here. It reads the
+	// focused UI element via macOS Accessibility, which works fine in
+	// native apps (Notes, TextEdit, Safari URL bar) but reliably
+	// returns no-focused for Electron / webview-based targets — and
+	// the latter is where Murrly is actually used the most (VS Code
+	// chat panels, Slack, Discord, ...). Until we have a workable
+	// path through those, the package sits unused; activating it for
+	// 30% of cases would only confuse the behaviour ("works here,
+	// silently no-ops there"). See conversation 2026-05-23.
 )
 
 // iconFS and iconDir are provided by icons_linux.go / icons_darwin.go —
@@ -51,6 +60,12 @@ func main() {
 	}
 
 	if !macospermissions.EnsureAccessibility() {
+		// First-launch prompt. macOS only shows the system alert once
+		// per TCC state — for a real user this is a single dialog they
+		// either accept or dismiss. During development the cdhash
+		// changes on every rebuild and install-mac.sh resets TCC, so
+		// the prompt fires repeatedly; if many invisibly stack up,
+		// `killall UserNotificationCenter` clears them.
 		log.Printf("accessibility: not granted yet — paste will not work until you enable Murrly in System Settings → Privacy & Security → Accessibility")
 	}
 	if err := recorder.InitPortAudio(); err != nil {
@@ -180,6 +195,8 @@ func main() {
 		Clipboard:   clipAdapter{cb},
 		Paster:      paster.New(),
 		PasteDelay:  time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond,
+		// AdjustText (context-aware insertion-point adaptation) is
+		// intentionally not wired — see the uicontext import comment.
 		OnState: func(s app.State) {
 			t.SetState(toTrayState(s))
 			switch s {
