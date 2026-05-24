@@ -92,22 +92,13 @@ func New(cfg Config) (*Transcriber, error) {
 	// unbounded stutter when disabled). Defaults are the upstream-
 	// tested combination.
 	//
-	// MaxContext = 0 IS overridden. The default (-1, unlimited)
-	// carries the decoded tokens of segment N into segment N+1 as
-	// prompt; when segment 1 falls into a stutter attractor (e.g.
-	// large-v3 on long monologues), that attractor's text is fed
-	// back as prompt for segment 2, which naturally continues the
-	// loop, and so on through the whole utterance. With 0 each
-	// 30 s segment decodes with a fresh prompt — a stutter is
-	// confined to one window instead of propagating across the
-	// entire audio. InitialPrompt is NOT affected; it applies only
-	// to segment 1 and survives this change. Trade-off: on long
-	// (>30 s) monologues, a technical term first heard in seg 1
-	// won't carry into seg 2's prompt. For push-to-talk this is
-	// irrelevant; for the long-monologue case, surviving a stutter
-	// with the remaining audio decoded cleanly is the better
-	// outcome than losing half the content to a propagating loop.
-	ctx.SetMaxContext(0)
+	// MaxContext IS platform-specific. On macOS (greedy decode by
+	// default) we pin it to 0 to break stutter-loop propagation
+	// across 30 s windows; on Linux (beam_search by default) the
+	// upstream default (-1, unlimited carry-over) is helpful and
+	// pinning to 0 made things worse. See params_{darwin,linux}.go
+	// for the per-platform rationale and one-line implementation.
+	applyPlatformWhisperParams(ctx)
 	if cfg.InitialPrompt != "" {
 		ctx.SetInitialPrompt(cfg.InitialPrompt)
 	}
