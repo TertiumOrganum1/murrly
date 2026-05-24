@@ -76,6 +76,13 @@ type App struct {
 	// that EventReprocess can re-run it through Whisper without
 	// asking the user to dictate again.
 	lastPCM []float32
+	// reprocessAttempts counts how many times EventReprocess has
+	// fired for the current lastPCM. Reset to 0 every time finish()
+	// captures fresh audio. Each click uses (n+1)*reprocessSilencePad
+	// of leading silence, so repeated clicks keep perturbing the
+	// chunk-boundary alignment differently and (hopefully) land on
+	// different decode paths.
+	reprocessAttempts int
 }
 
 const (
@@ -150,26 +157,32 @@ func (a *App) finish() {
 	// Save the freshly-captured PCM so EventReprocess can re-run it
 	// later without re-recording. We replace any previous one — only
 	// the most recent utterance is reachable through "Перепроцессить".
+	// Reset the reprocess counter — new audio starts a fresh
+	// perturbation sequence.
 	a.lastPCM = pcm
+	a.reprocessAttempts = 0
 	a.transcribeAndPaste(pcm)
 }
 
-// reprocess re-runs the last captured PCM with a small silence
-// prefix prepended. Padding shifts Whisper's 30 s chunk boundaries,
-// which (even at T=0) lands the decoder on a different search path
-// and is the same perturbation the auto-retry uses. Helpful when the
-// first transcription dropped punctuation or otherwise looks bad —
-// pretty much "F12 again without actually speaking".
+// reprocess re-runs the last captured PCM with a silence prefix
+// prepended. Each successive click on "Перепроцессить" grows the
+// prefix by reprocessSilencePadSec, so click 1 adds 0.5 s, click 2
+// adds 1.0 s, etc. — every click lands Whisper's 30 s chunk
+// boundary on a different sample of the audio, which is what
+// produces a different decode path at T=0. The counter resets the
+// next time finish() captures fresh audio.
 func (a *App) reprocess() {
 	if len(a.lastPCM) == 0 {
 		log.Printf("reprocess: no saved audio to re-run")
 		return
 	}
-	silentSamples := int(reprocessSilencePadSec * pcmSampleRateHz)
+	a.reprocessAttempts++
+	padSec := reprocessSilencePadSec * float64(a.reprocessAttempts)
+	silentSamples := int(padSec * pcmSampleRateHz)
 	padded := make([]float32, silentSamples+len(a.lastPCM))
 	copy(padded[silentSamples:], a.lastPCM)
 	origSec := float64(len(a.lastPCM)) / float64(pcmSampleRateHz)
-	log.Printf("reprocess: re-running last %.2fs of audio with %.1fs leading silence", origSec, reprocessSilencePadSec)
+	log.Printf("reprocess: attempt #%d, re-running last %.2fs of audio with %.1fs leading silence", a.reprocessAttempts, origSec, padSec)
 	a.transcribeAndPaste(padded)
 }
 
