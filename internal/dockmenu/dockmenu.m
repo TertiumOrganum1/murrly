@@ -20,6 +20,7 @@ typedef void (*mur_void_cb)(void);
     mur_void_cb cbReloadConfig;
     mur_void_cb cbOpenMicSettings;
     mur_void_cb cbOpenAccessibility;
+    mur_void_cb cbReprocess;
     mur_void_cb cbQuit;
 }
 - (NSMenu*)applicationDockMenu:(NSApplication*)sender;
@@ -32,6 +33,7 @@ typedef void (*mur_void_cb)(void);
 - (void)didPickReloadConfig:(id)sender;
 - (void)didPickOpenMicSettings:(id)sender;
 - (void)didPickOpenAccessibility:(id)sender;
+- (void)didPickReprocess:(id)sender;
 - (void)didPickQuit:(id)sender;
 @end
 
@@ -62,6 +64,7 @@ typedef void (*mur_void_cb)(void);
 - (void)didPickReloadConfig:(id)sender { if (cbReloadConfig) cbReloadConfig(); }
 - (void)didPickOpenMicSettings:(id)sender { if (cbOpenMicSettings) cbOpenMicSettings(); }
 - (void)didPickOpenAccessibility:(id)sender { if (cbOpenAccessibility) cbOpenAccessibility(); }
+- (void)didPickReprocess:(id)sender { if (cbReprocess) cbReprocess(); }
 - (void)didPickQuit:(id)sender { if (cbQuit) cbQuit(); }
 
 @end
@@ -86,6 +89,7 @@ void mur_dockmenu_install(
     void (*onReloadConfig)(void),
     void (*onOpenMicSettings)(void),
     void (*onOpenAccessibility)(void),
+    void (*onReprocess)(void),
     void (*onQuit)(void),
     const char* const* modelLabels,
     int modelCount
@@ -108,6 +112,7 @@ void mur_dockmenu_install(
         gMurDelegate->cbReloadConfig = onReloadConfig;
         gMurDelegate->cbOpenMicSettings = onOpenMicSettings;
         gMurDelegate->cbOpenAccessibility = onOpenAccessibility;
+        gMurDelegate->cbReprocess = onReprocess;
         gMurDelegate->cbQuit = onQuit;
         gMurDelegate->originalDelegate = [NSApp delegate];
         gMurDelegate->modelItems = [NSMutableArray array];
@@ -176,6 +181,16 @@ void mur_dockmenu_install(
             keyEquivalent:@""];
         [openItem setTarget:gMurDelegate];
         [menu addItem:openItem];
+
+        // Manual "try again" on the most recent recording — same
+        // perturbation (silence prefix) the auto-retry uses, but
+        // triggered by the user when they notice a bad transcription.
+        NSMenuItem* reprocessItem = [[NSMenuItem alloc]
+            initWithTitle:@"Перепроцессить последнее"
+            action:@selector(didPickReprocess:)
+            keyEquivalent:@""];
+        [reprocessItem setTarget:gMurDelegate];
+        [menu addItem:reprocessItem];
 
         // Permissions submenu — surfaces TCC privacy panes because the
         // brief AXIsProcessTrustedWithOptions toast otherwise vanishes

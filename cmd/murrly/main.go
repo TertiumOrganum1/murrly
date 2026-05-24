@@ -116,6 +116,12 @@ func main() {
 	// pick). Bootstrap with MODELS=all populates all three.
 	presentModelNames, presentModelLabels := presentModels()
 
+	// events drives the App state machine. Declared early so the
+	// menu callbacks (OnReprocess in particular) can send into it.
+	// The hotkey goroutine below pumps EventKeyDown/Up into the same
+	// channel.
+	events := make(chan app.Event, 8)
+
 	var t *tray.Tray
 	actions := &menuactions.Actions{
 		OnCopyTranscript: func(index int) {
@@ -150,6 +156,18 @@ func main() {
 			}
 		},
 		OnOpenConfig: func() { openConfigFile(cfgPath) },
+		OnReprocess: func() {
+			// Non-blocking: if the channel is full (very unusual —
+			// it's buffered to 8 events) we drop the click rather
+			// than stall the menu thread. App.handle ignores
+			// EventReprocess unless state is Idle/Error, so
+			// click-while-busy is naturally a no-op.
+			select {
+			case events <- app.EventReprocess:
+			default:
+				log.Printf("reprocess: event channel full, ignored")
+			}
+		},
 		IsAutostartOn: autostart.Enabled,
 		OnToggleAutostart: func() bool {
 			if autostart.Enabled() {
@@ -229,7 +247,6 @@ func main() {
 	}
 	go hk.Start()
 
-	events := make(chan app.Event, 8)
 	go func() {
 		for e := range hk.Events() {
 			switch e {

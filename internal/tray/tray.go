@@ -93,6 +93,11 @@ func (t *Tray) onReady() {
 		item.Disable()
 	}
 
+	// "Reprocess last" — re-runs the most recent recording through
+	// Whisper with a small silence prefix. Cheap manual retry when
+	// the first decode dropped punctuation or otherwise looks bad.
+	reprocessItem := systray.AddMenuItem("Перепроцессить последнее", "Прогнать последнюю запись через Whisper ещё раз (со сдвигом окна)")
+
 	systray.AddSeparator()
 
 	// Hide the model picker when fewer than 2 models are available —
@@ -203,6 +208,10 @@ func (t *Tray) onReady() {
 				t.copyTranscript(1)
 			case <-copyOlderItem.ClickedCh:
 				t.copyTranscript(2)
+			case <-reprocessItem.ClickedCh:
+				if t.actions.OnReprocess != nil {
+					t.actions.OnReprocess()
+				}
 			case <-autostartItem.ClickedCh:
 				if t.actions.OnToggleAutostart != nil {
 					if t.actions.OnToggleAutostart() {

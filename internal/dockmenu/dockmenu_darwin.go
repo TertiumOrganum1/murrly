@@ -16,6 +16,7 @@ extern void murGoOpenConfig(void);
 extern void murGoReloadConfig(void);
 extern void murGoOpenMicSettings(void);
 extern void murGoOpenAccessibility(void);
+extern void murGoReprocess(void);
 extern void murGoQuit(void);
 */
 import "C"
@@ -63,6 +64,7 @@ func Install(a *menuactions.Actions) {
 		(*[0]byte)(C.murGoReloadConfig),
 		(*[0]byte)(C.murGoOpenMicSettings),
 		(*[0]byte)(C.murGoOpenAccessibility),
+		(*[0]byte)(C.murGoReprocess),
 		(*[0]byte)(C.murGoQuit),
 		labelsPtr,
 		C.int(len(cLabels)),
@@ -155,6 +157,13 @@ func murGoOpenMicSettings() {
 func murGoOpenAccessibility() {
 	if a := loadActions(); a != nil && a.OnOpenAccessibility != nil {
 		a.OnOpenAccessibility()
+	}
+}
+
+//export murGoReprocess
+func murGoReprocess() {
+	if a := loadActions(); a != nil && a.OnReprocess != nil {
+		a.OnReprocess()
 	}
 }
 

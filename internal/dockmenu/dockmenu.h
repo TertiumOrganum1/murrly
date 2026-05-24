@@ -20,6 +20,7 @@ void mur_dockmenu_install(
     void (*onReloadConfig)(void),
     void (*onOpenMicSettings)(void),
     void (*onOpenAccessibility)(void),
+    void (*onReprocess)(void),
     void (*onQuit)(void),
     const char* const* modelLabels,
     int modelCount

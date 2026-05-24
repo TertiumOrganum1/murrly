@@ -21,6 +21,15 @@ type Actions struct {
 	ModelLabels      []string
 	ActiveModelIndex int
 
+	// OnReprocess re-runs the last recorded audio through the
+	// transcriber with a small silence prefix that perturbs the
+	// decoder's chunk-boundary alignment — same trick as the
+	// auto-retry, but triggered manually when the user sees a bad
+	// transcription. Wired through the App's event channel so the
+	// menu callback returns immediately and the actual work happens
+	// on the App's goroutine (avoids racing with F12 flow).
+	OnReprocess func()
+
 	// Config helpers.
 	OnReloadConfig func()
 	OnOpenConfig   func()
