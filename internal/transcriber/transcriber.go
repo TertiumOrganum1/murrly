@@ -86,20 +86,28 @@ func New(cfg Config) (*Transcriber, error) {
 	if cfg.BeamSize > 0 {
 		ctx.SetBeamSize(cfg.BeamSize)
 	}
-	// Temperature, TemperatureFallback and MaxContext are
-	// deliberately NOT touched here — we let whisper.cpp use its
-	// own documented defaults (temperature=0, temperature_inc=0.2,
-	// max_context=-1). Past attempts at hand-tuning each of these
-	// caused regressions: disabling temperature_inc let stutter
-	// loops run unbounded (whisper's compression-ratio detector
-	// fires but, with fallback off, can't perturb), enabling it
-	// occasionally produced lowercase-no-punct "fast-mode" output,
-	// pinning max_context=0 lost cross-segment context on long
-	// monologues. Defaults handle the typical push-to-talk case
-	// best; the leftover failure modes are caught by post-
-	// processing (collapseRepeatedBlocks, dedupeSubstantialSentences)
-	// and by our outer looksLikeFastMode retry with padding +
-	// beam=5.
+	// Temperature and TemperatureFallback are intentionally left at
+	// whisper.cpp defaults (0 and 0.2) — past hand-tuning of these
+	// caused regressions (fast-mode lowercase output when enabled,
+	// unbounded stutter when disabled). Defaults are the upstream-
+	// tested combination.
+	//
+	// MaxContext = 0 IS overridden. The default (-1, unlimited)
+	// carries the decoded tokens of segment N into segment N+1 as
+	// prompt; when segment 1 falls into a stutter attractor (e.g.
+	// large-v3 on long monologues), that attractor's text is fed
+	// back as prompt for segment 2, which naturally continues the
+	// loop, and so on through the whole utterance. With 0 each
+	// 30 s segment decodes with a fresh prompt — a stutter is
+	// confined to one window instead of propagating across the
+	// entire audio. InitialPrompt is NOT affected; it applies only
+	// to segment 1 and survives this change. Trade-off: on long
+	// (>30 s) monologues, a technical term first heard in seg 1
+	// won't carry into seg 2's prompt. For push-to-talk this is
+	// irrelevant; for the long-monologue case, surviving a stutter
+	// with the remaining audio decoded cleanly is the better
+	// outcome than losing half the content to a propagating loop.
+	ctx.SetMaxContext(0)
 	if cfg.InitialPrompt != "" {
 		ctx.SetInitialPrompt(cfg.InitialPrompt)
 	}
