@@ -86,39 +86,15 @@ func New(cfg Config) (*Transcriber, error) {
 	if cfg.BeamSize > 0 {
 		ctx.SetBeamSize(cfg.BeamSize)
 	}
-	// Start each decode at T=0 (deterministic). Whisper's built-in
-	// temperature fallback is REQUIRED — without it any segment that
-	// trips the entropy / logprob / compression-ratio quality gates
-	// just passes through unchanged, which is exactly how a stutter
-	// loop manages to produce 100+ copies of the same sentence:
-	// whisper internally detects the low-entropy stuck-in-attractor
-	// state but, with fallback disabled, can't perturb itself out.
-	// Re-enable at step 0.2 (whisper's documented default) — on
-	// failure the segment is retried at T=0.2, 0.4, … up to 1.0. The
-	// high-temperature output we used to fear (lowercase, no
-	// punctuation) is caught downstream by our own looksLikeFastMode
-	// + retry-with-silence-and-wider-beam logic, so we have a safety
-	// net for the rare cases where T=0.2 doesn't itself produce
-	// clean text.
+	// Force deterministic decode and disable Whisper's temperature
+	// fallback. Whisper retries each chunk at T=0.0, 0.2, 0.4, … 1.0
+	// when its quality checks (entropy / logprob / compression ratio)
+	// trip; high-temperature outputs are the ones that come back
+	// lowercase with no punctuation. Pinning T=0 with beam_search keeps
+	// the decoder in the only mode we want. -1 disables fallback per
+	// the binding's documented contract.
 	ctx.SetTemperature(0)
-	ctx.SetTemperatureFallback(0.2)
-	// MaxContext = 0 disables the carry-over of the previous
-	// segment's decoded tokens into the next segment's prompt.
-	// Default (-1, unlimited) is what propagates a stutter from
-	// segment 1 into segments 2..N — once Whisper falls into the
-	// "Это не так просто." attractor on segment 1, every subsequent
-	// segment is seeded with that same text and naturally continues
-	// the loop. With 0 each segment decodes independently, so a
-	// stutter is at worst confined to one 30 s window instead of
-	// propagating to the whole utterance.
-	//
-	// InitialPrompt is NOT affected — it's applied only to the first
-	// segment and survives this change. Trade-off: on long mono-
-	// monologues (>30 s) segments 2+ lose the in-flight context,
-	// so a technical term first heard in seg 1 won't carry to
-	// seg 2's prompt. For push-to-talk (typical utterance fits in
-	// one 30 s window) this is irrelevant.
-	ctx.SetMaxContext(0)
+	ctx.SetTemperatureFallback(-1)
 	if cfg.InitialPrompt != "" {
 		ctx.SetInitialPrompt(cfg.InitialPrompt)
 	}
