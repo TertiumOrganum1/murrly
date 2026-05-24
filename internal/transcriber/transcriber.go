@@ -49,11 +49,19 @@ const (
 	longAudioBeamSize  = 5
 )
 
-// New loads the model into VRAM/GPU memory and allocates the inference
-// context (KV cache + compute buffers, ~680MB for large-v3 turbo). Call
-// once at program start. The context is reused for every Transcribe call —
-// re-allocating Metal buffers on each push-to-talk adds ~1 second on M1 Pro,
-// so caching it is the main latency win.
+// New loads the model into VRAM/GPU memory. Whether the inference
+// context is also allocated up-front (and reused across calls) or
+// re-created inside every Transcribe is a platform decision — see
+// platformReuseContext.
+//
+// macOS: context reused. Re-allocating Metal compute buffers on
+// each push-to-talk added ~1 s of latency on M1 Pro, so caching is
+// a meaningful win.
+//
+// Linux: fresh context per call. This matches the pre-macOS code
+// path (commit 5738ad7), which the user reports as the most stable
+// known behaviour on Linux. On CUDA + large-v3 the per-call
+// allocation overhead is negligible.
 func New(cfg Config) (*Transcriber, error) {
 	t0 := time.Now()
 	m, err := whisper.New(cfg.ModelPath)
@@ -61,48 +69,61 @@ func New(cfg Config) (*Transcriber, error) {
 		return nil, fmt.Errorf("load model %s: %w", cfg.ModelPath, err)
 	}
 	loadMs := time.Since(t0).Milliseconds()
-	t1 := time.Now()
-	ctx, err := m.NewContext()
-	if err != nil {
-		_ = m.Close()
-		return nil, fmt.Errorf("new context: %w", err)
+
+	t := &Transcriber{model: m, cfg: cfg}
+
+	if platformReuseContext() {
+		t1 := time.Now()
+		ctx, err := m.NewContext()
+		if err != nil {
+			_ = m.Close()
+			return nil, fmt.Errorf("new context: %w", err)
+		}
+		ctxMs := time.Since(t1).Milliseconds()
+		log.Printf("transcriber: model=%s load=%dms ctx=%dms (total startup=%dms)", cfg.ModelPath, loadMs, ctxMs, loadMs+ctxMs)
+		if err := configureContext(ctx, cfg); err != nil {
+			_ = m.Close()
+			return nil, err
+		}
+		t.ctx = ctx
+	} else {
+		log.Printf("transcriber: model=%s load=%dms (context allocated per call)", cfg.ModelPath, loadMs)
 	}
-	ctxMs := time.Since(t1).Milliseconds()
-	log.Printf("transcriber: model=%s load=%dms ctx=%dms (total startup=%dms)", cfg.ModelPath, loadMs, ctxMs, loadMs+ctxMs)
-	// Apply config settings once. Language can change per call if needed,
-	// but BeamSize and InitialPrompt are stable.
+
+	return t, nil
+}
+
+// configureContext applies the user-controlled params (language,
+// beam size, initial prompt) plus platform-specific tweaks to a
+// freshly-allocated whisper.Context. Used both by New (when the
+// context is created up-front) and by transcribeOnce (when it's
+// created per-call on platforms where platformReuseContext is false).
+//
+// Temperature and TemperatureFallback are intentionally left at
+// whisper.cpp defaults — past hand-tuning regressed (fast-mode
+// output when enabled explicitly, unbounded stutter when disabled).
+// applyPlatformWhisperParams handles MaxContext per-platform; see
+// params_{darwin,linux}.go.
+func configureContext(ctx whisper.Context, cfg Config) error {
 	lang := cfg.Language
 	if lang == "" {
-		// whisper_full_default_params defaults language to "en", which makes
-		// the model transcribe Russian speech as if it were English (lost
-		// punctuation, pseudo-translation, mangled terms). "auto" lets
-		// Whisper detect language from the input.
+		// whisper_full_default_params defaults language to "en", which
+		// makes the model transcribe Russian speech as if it were
+		// English (lost punctuation, pseudo-translation, mangled
+		// terms). "auto" lets Whisper detect language from the input.
 		lang = "auto"
 	}
 	if err := ctx.SetLanguage(lang); err != nil {
-		_ = m.Close()
-		return nil, fmt.Errorf("set language %q: %w", lang, err)
+		return fmt.Errorf("set language %q: %w", lang, err)
 	}
 	if cfg.BeamSize > 0 {
 		ctx.SetBeamSize(cfg.BeamSize)
 	}
-	// Temperature and TemperatureFallback are intentionally left at
-	// whisper.cpp defaults (0 and 0.2) — past hand-tuning of these
-	// caused regressions (fast-mode lowercase output when enabled,
-	// unbounded stutter when disabled). Defaults are the upstream-
-	// tested combination.
-	//
-	// MaxContext IS platform-specific. On macOS (greedy decode by
-	// default) we pin it to 0 to break stutter-loop propagation
-	// across 30 s windows; on Linux (beam_search by default) the
-	// upstream default (-1, unlimited carry-over) is helpful and
-	// pinning to 0 made things worse. See params_{darwin,linux}.go
-	// for the per-platform rationale and one-line implementation.
 	applyPlatformWhisperParams(ctx)
 	if cfg.InitialPrompt != "" {
 		ctx.SetInitialPrompt(cfg.InitialPrompt)
 	}
-	return &Transcriber{model: m, ctx: ctx, cfg: cfg}, nil
+	return nil
 }
 
 func (t *Transcriber) Close() error {
@@ -138,7 +159,13 @@ func (t *Transcriber) Transcribe(pcm []float32) (string, error) {
 		return "", err
 	}
 	bestSegs := firstSegs
-	if looksLikeFastMode(strings.Join(firstSegs, " ")) {
+	// Fast-mode retry is platform-specific. On macOS (beam=1 greedy)
+	// the silence-padded beam=5 re-decode is a useful recovery path.
+	// On Linux (beam=5 baseline) it was observed to occasionally
+	// replace acceptable first-pass output with worse retry output,
+	// and the pre-macOS code didn't have it at all — see
+	// platformFastModeRetry in params_linux.go.
+	if platformFastModeRetry() && looksLikeFastMode(strings.Join(firstSegs, " ")) {
 		silentSamples := int(fastModeSilencePadSec * pcmSampleRateHz)
 		paddedPcm := pcm
 		for attempt := 1; attempt <= fastModeMaxRetries; attempt++ {
@@ -194,11 +221,27 @@ func (t *Transcriber) chooseBeam(pcm []float32) int {
 // returns the raw segments (caller decides whether to keep them or
 // retry, and applies formatSegments at the end on the chosen result).
 // Caller holds t.mu.
+//
+// On platforms with platformReuseContext=true the cached t.ctx is
+// reused (and its language / initial-prompt config was applied once
+// in New). On platforms with platformReuseContext=false a fresh
+// context is allocated and configured here.
 func (t *Transcriber) transcribeOnce(pcm []float32, beam int) ([]string, error) {
-	t.ctx.SetBeamSize(beam)
+	ctx := t.ctx
+	if ctx == nil {
+		var err error
+		ctx, err = t.model.NewContext()
+		if err != nil {
+			return nil, fmt.Errorf("new context: %w", err)
+		}
+		if err := configureContext(ctx, t.cfg); err != nil {
+			return nil, err
+		}
+	}
+	ctx.SetBeamSize(beam)
 
 	t0 := time.Now()
-	if err := t.ctx.Process(pcm, nil, nil, nil); err != nil {
+	if err := ctx.Process(pcm, nil, nil, nil); err != nil {
 		return nil, fmt.Errorf("process: %w", err)
 	}
 	processMs := time.Since(t0).Milliseconds()
@@ -206,7 +249,7 @@ func (t *Transcriber) transcribeOnce(pcm []float32, beam int) ([]string, error) 
 	t1 := time.Now()
 	var segments []string
 	for {
-		seg, err := t.ctx.NextSegment()
+		seg, err := ctx.NextSegment()
 		if err != nil {
 			break
 		}
