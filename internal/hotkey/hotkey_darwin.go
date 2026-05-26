@@ -53,6 +53,21 @@ func New(key string) (*Listener, error) {
 	}, nil
 }
 
+// NewWithCtrl creates a Listener bound to Ctrl+<key> on macOS via
+// golang.design/x/hotkey's modifier list. Used for the reprocess
+// binding so it doesn't collide with the bare push-to-talk hotkey.
+func NewWithCtrl(key string) (*Listener, error) {
+	k, ok := keyMap[strings.ToLower(strings.TrimSpace(key))]
+	if !ok {
+		return nil, fmt.Errorf("hotkey: unknown key %q (supported: F1..F15)", key)
+	}
+	return &Listener{
+		hk:     gohotkey.New([]gohotkey.Modifier{gohotkey.ModCtrl}, k),
+		events: make(chan Event, 8),
+		stop:   make(chan struct{}),
+	}, nil
+}
+
 func (l *Listener) Events() <-chan Event { return l.events }
 
 // Start registers the hotkey and pipes press/release events to Events().

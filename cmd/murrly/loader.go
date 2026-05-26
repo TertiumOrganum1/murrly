@@ -121,3 +121,16 @@ func persistModelChoice(cfgPath string, cfg config.Config, modelName string) err
 	defer f.Close()
 	return toml.NewEncoder(f).Encode(cfg)
 }
+
+// persistPadSilence writes the new pad-silence state to config.toml.
+// Same pattern as persistModelChoice — re-encode the whole struct so
+// no other live edits are clobbered.
+func persistPadSilence(cfgPath string, cfg config.Config, on bool) error {
+	cfg.Whisper.PadSilence = on
+	f, err := os.Create(cfgPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}

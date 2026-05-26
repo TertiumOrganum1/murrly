@@ -4,6 +4,7 @@ package app
 import (
 	"context"
 	"log"
+	"sync/atomic"
 	"time"
 )
 
@@ -67,6 +68,13 @@ type Config struct {
 	// is a valid no-op (and the default when AdjustText is nil).
 	AdjustText func(string) string
 	PasteDelay time.Duration
+	// PadSilence is the initial value of the live-toggle. When true,
+	// every transcribe call (including the first, not just reprocess
+	// retries) gets baselineSilencePadSec of leading and trailing
+	// silence wrapped around the captured PCM. Useful when Whisper
+	// keeps clipping the first/last word; the menu surfaces a
+	// checkbox so the user can flip it at runtime via SetPadSilence.
+	PadSilence bool
 }
 
 type App struct {
@@ -83,6 +91,12 @@ type App struct {
 	// chunk-boundary alignment differently and (hopefully) land on
 	// different decode paths.
 	reprocessAttempts int
+	// padSilence is the live state for the "pad every sample with 1 s
+	// silence at both ends" toggle (config.whisper.pad_silence).
+	// Read on the App goroutine in finish()/reprocess(); written from
+	// the menu callback via SetPadSilence — atomic to avoid mutex
+	// scaffolding for a single boolean.
+	padSilence atomic.Bool
 }
 
 const (
@@ -90,19 +104,39 @@ const (
 	// duplicated here so the App can compute audio lengths and
 	// silence-prefix samples without importing the recorder.
 	pcmSampleRateHz = 16000
-	// reprocessSilencePadSec — how much silence to prepend before
-	// re-running the saved PCM. Shifts Whisper's 30 s chunk
-	// boundary by half a second, which is enough to land the
-	// decoder on a different search path even at T=0.
-	reprocessSilencePadSec = 0.5
+	// reprocessSilencePadSec — base unit of leading silence each
+	// reprocess click contributes. Click N prepends N seconds of
+	// silence on top of any baseline pad — enough to land Whisper's
+	// 30 s chunk boundary on a different sample of the audio and
+	// produce a different decode path even at T=0.
+	reprocessSilencePadSec = 1.0
+	// baselineSilencePadSec — added to both ends of every clip when
+	// the pad_silence option is on, including the very first
+	// transcription. Each reprocess click stacks its own
+	// reprocessSilencePadSec on top of the baseline at the start;
+	// the trailing pad stays at the baseline regardless of reprocess
+	// count (the trailer's job is to keep the last word from
+	// touching the chunk boundary, not to perturb the search).
+	baselineSilencePadSec = 1.0
 )
 
 func New(cfg Config) *App {
 	if cfg.PasteDelay == 0 {
 		cfg.PasteDelay = 80 * time.Millisecond
 	}
-	return &App{cfg: cfg, state: StateIdle}
+	a := &App{cfg: cfg, state: StateIdle}
+	a.padSilence.Store(cfg.PadSilence)
+	return a
 }
+
+// SetPadSilence flips the pad-silence behaviour at runtime. The menu
+// renderers call this on toggle so subsequent transcriptions immediately
+// pick up the new state. The corresponding flag in config.toml is
+// persisted separately by main (so the new value survives a restart).
+func (a *App) SetPadSilence(on bool) { a.padSilence.Store(on) }
+
+// PadSilenceOn returns the current pad-silence state for menu rendering.
+func (a *App) PadSilenceOn() bool { return a.padSilence.Load() }
 
 func (a *App) Run(ctx context.Context, events <-chan Event) {
 	a.setState(StateIdle)
@@ -161,29 +195,50 @@ func (a *App) finish() {
 	// perturbation sequence.
 	a.lastPCM = pcm
 	a.reprocessAttempts = 0
-	a.transcribeAndPaste(pcm)
+
+	toTranscribe := pcm
+	if a.padSilence.Load() {
+		toTranscribe = padPCM(pcm, baselineSilencePadSec, baselineSilencePadSec)
+	}
+	a.transcribeAndPaste(toTranscribe)
 }
 
 // reprocess re-runs the last captured PCM with a silence prefix
-// prepended. Each successive click on "Перепроцессить" grows the
-// prefix by reprocessSilencePadSec, so click 1 adds 0.5 s, click 2
-// adds 1.0 s, etc. — every click lands Whisper's 30 s chunk
-// boundary on a different sample of the audio, which is what
-// produces a different decode path at T=0. The counter resets the
-// next time finish() captures fresh audio.
+// prepended. Click N prepends N * reprocessSilencePadSec seconds of
+// leading silence (1 s, 2 s, 3 s, …) — every click lands Whisper's
+// 30 s chunk boundary on a different sample of the audio, which is
+// what produces a different decode path at T=0. If the pad_silence
+// option is on, baselineSilencePadSec is added on top at the start
+// and the trailing pad sits at baselineSilencePadSec regardless of
+// click count. The counter resets the next time finish() captures
+// fresh audio.
 func (a *App) reprocess() {
 	if len(a.lastPCM) == 0 {
 		log.Printf("reprocess: no saved audio to re-run")
 		return
 	}
 	a.reprocessAttempts++
-	padSec := reprocessSilencePadSec * float64(a.reprocessAttempts)
-	silentSamples := int(padSec * pcmSampleRateHz)
-	padded := make([]float32, silentSamples+len(a.lastPCM))
-	copy(padded[silentSamples:], a.lastPCM)
+	startPad := reprocessSilencePadSec * float64(a.reprocessAttempts)
+	endPad := 0.0
+	if a.padSilence.Load() {
+		startPad += baselineSilencePadSec
+		endPad = baselineSilencePadSec
+	}
+	padded := padPCM(a.lastPCM, startPad, endPad)
 	origSec := float64(len(a.lastPCM)) / float64(pcmSampleRateHz)
-	log.Printf("reprocess: attempt #%d, re-running last %.2fs of audio with %.1fs leading silence", a.reprocessAttempts, origSec, padSec)
+	log.Printf("reprocess: attempt #%d, re-running last %.2fs of audio with %.1fs leading, %.1fs trailing silence", a.reprocessAttempts, origSec, startPad, endPad)
 	a.transcribeAndPaste(padded)
+}
+
+// padPCM returns a new buffer with startSec of zero samples
+// prepended and endSec of zero samples appended to pcm. Either
+// duration may be 0 — the caller passes 0 for "no pad".
+func padPCM(pcm []float32, startSec, endSec float64) []float32 {
+	startSamples := int(startSec * pcmSampleRateHz)
+	endSamples := int(endSec * pcmSampleRateHz)
+	out := make([]float32, startSamples+len(pcm)+endSamples)
+	copy(out[startSamples:], pcm)
+	return out
 }
 
 // transcribeAndPaste is the shared body of both finish() (F12 path)

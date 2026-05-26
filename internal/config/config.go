@@ -48,6 +48,13 @@ type WhisperConfig struct {
 	// risk losing punctuation. Visible in the default config so users
 	// know the knob exists.
 	BeamAdaptive  bool   `toml:"beam_adaptive"`
+	// PadSilence — when true, every clip is wrapped in 1 s of zero
+	// samples at both ends before reaching Whisper. Each manual
+	// "Перепроцессить" click then stacks another 1 s of leading
+	// silence on top. Exposed in config.toml so the default state
+	// survives restarts; flipped at runtime via the tray's "Тишина
+	// по краям" toggle.
+	PadSilence    bool   `toml:"pad_silence"`
 	InitialPrompt string `toml:"initial_prompt"`
 }
 
@@ -73,6 +80,7 @@ func defaults() Config {
 			Language:      "",
 			BeamSize:      defaultBeamSize(), // platform-tuned: Linux 5, macOS 1
 			BeamAdaptive:  false,             // opt-in; set true to get short=1 / long=5 dynamic switching
+			PadSilence:    false,             // opt-in; wrap every clip in 1 s silence padding
 			InitialPrompt: "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
 		},
 		// PasteDelayMs sits between Set-clipboard / Cmd-V and the Restore-clipboard

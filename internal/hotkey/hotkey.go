@@ -57,22 +57,37 @@ var x11Keysyms = map[string]C.KeySym{
 }
 
 type Listener struct {
-	keysym  C.KeySym
-	events  chan Event
-	stop    chan struct{}
-	pressed bool
-	display *C.Display
+	keysym   C.KeySym
+	modifier C.uint // 0 = bare key, or ControlMask etc. for combinations
+	events   chan Event
+	stop     chan struct{}
+	pressed  bool
+	display  *C.Display
 }
 
 func New(key string) (*Listener, error) {
+	return newListener(key, 0)
+}
+
+// NewWithCtrl creates a Listener bound to Ctrl+<key>. Used as the
+// reprocess hotkey alongside the bare push-to-talk binding so the
+// two don't fight each other: X11 routes events by exact modifier
+// state, so Ctrl+F12 lands on this listener while plain F12 stays
+// on the New() listener.
+func NewWithCtrl(key string) (*Listener, error) {
+	return newListener(key, C.ControlMask)
+}
+
+func newListener(key string, modifier C.uint) (*Listener, error) {
 	sym, ok := x11Keysyms[strings.ToLower(strings.TrimSpace(key))]
 	if !ok {
 		return nil, fmt.Errorf("hotkey: unknown key %q (supported: F1..F15)", key)
 	}
 	return &Listener{
-		keysym: sym,
-		events: make(chan Event, 8),
-		stop:   make(chan struct{}),
+		keysym:   sym,
+		modifier: modifier,
+		events:   make(chan Event, 8),
+		stop:     make(chan struct{}),
 	}, nil
 }
 
@@ -93,8 +108,13 @@ func (l *Listener) Start() {
 	C.vi_enable_detectable_autorepeat(display)
 
 	root := C.XDefaultRootWindow(display)
-	for _, modifiers := range []C.uint{0, C.LockMask, C.Mod2Mask, C.LockMask | C.Mod2Mask} {
-		if C.vi_grab_key(display, root, l.keysym, modifiers) == 0 {
+	// Grab the key for every lock-state combination on top of the
+	// caller-supplied modifier so CapsLock/NumLock don't gate the
+	// hotkey. l.modifier == 0 covers the bare-key case (push-to-talk);
+	// non-zero values (e.g. ControlMask) cover modifier+key combos
+	// like Ctrl+F12 used for reprocess.
+	for _, lockState := range []C.uint{0, C.LockMask, C.Mod2Mask, C.LockMask | C.Mod2Mask} {
+		if C.vi_grab_key(display, root, l.keysym, l.modifier|lockState) == 0 {
 			return
 		}
 	}

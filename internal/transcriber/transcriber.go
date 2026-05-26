@@ -312,7 +312,7 @@ func looksLikeFastMode(text string) bool {
 const (
 	fastModeMinWords      = 15
 	fastModeMaxRetries    = 2
-	fastModeSilencePadSec = 0.5
+	fastModeSilencePadSec = 1.0
 )
 
 // formatSegments runs the post-processing pipeline that turns the

@@ -123,6 +123,7 @@ func main() {
 	events := make(chan app.Event, 8)
 
 	var t *tray.Tray
+	var a *app.App
 	actions := &menuactions.Actions{
 		OnCopyTranscript: func(index int) {
 			text, ok := history.Get(index)
@@ -185,6 +186,21 @@ func main() {
 			dockmenu.SetAutostart(newState)
 			return newState
 		},
+		IsPadSilenceOn: func() bool {
+			if a == nil {
+				return cfg.Whisper.PadSilence
+			}
+			return a.PadSilenceOn()
+		},
+		OnTogglePadSilence: func() bool {
+			newState := !a.PadSilenceOn()
+			a.SetPadSilence(newState)
+			if err := persistPadSilence(cfgPath, cfg, newState); err != nil {
+				log.Printf("pad-silence persist: %v", err)
+			}
+			cfg.Whisper.PadSilence = newState
+			return newState
+		},
 		OnQuit: func() { cancel(); t.Quit() },
 	}
 	if privacyPanesSupported() {
@@ -207,12 +223,13 @@ func main() {
 	}
 	t = tray.New(icons, actions)
 
-	a := app.New(app.Config{
+	a = app.New(app.Config{
 		Recorder:    recorder.New(),
 		Transcriber: loader,
 		Clipboard:   clipAdapter{cb},
 		Paster:      paster.New(),
 		PasteDelay:  time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond,
+		PadSilence:  cfg.Whisper.PadSilence,
 		// AdjustText (context-aware insertion-point adaptation) is
 		// intentionally not wired — see the uicontext import comment.
 		OnState: func(s app.State) {

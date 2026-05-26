@@ -121,6 +121,9 @@ func (t *Tray) onReady() {
 	autostartChecked := t.actions.IsAutostartOn != nil && t.actions.IsAutostartOn()
 	autostartItem := systray.AddMenuItemCheckbox("Запускать при логине", "Стартовать Murrly автоматически при входе в систему", autostartChecked)
 
+	padSilenceChecked := t.actions.IsPadSilenceOn != nil && t.actions.IsPadSilenceOn()
+	padSilenceItem := systray.AddMenuItemCheckbox("Тишина по краям", "Добавлять 1 с тишины с обеих сторон каждой записи перед Whisper", padSilenceChecked)
+
 	reloadItem := systray.AddMenuItem("Перезагрузить конфиг", "Перечитать config.toml")
 	openCfgItem := systray.AddMenuItem("Открыть конфиг", "Открыть config.toml")
 
@@ -218,6 +221,14 @@ func (t *Tray) onReady() {
 						autostartItem.Check()
 					} else {
 						autostartItem.Uncheck()
+					}
+				}
+			case <-padSilenceItem.ClickedCh:
+				if t.actions.OnTogglePadSilence != nil {
+					if t.actions.OnTogglePadSilence() {
+						padSilenceItem.Check()
+					} else {
+						padSilenceItem.Uncheck()
 					}
 				}
 			case <-quitItem.ClickedCh:

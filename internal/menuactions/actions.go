@@ -41,6 +41,12 @@ type Actions struct {
 	OnToggleAutostart func() bool
 	IsAutostartOn     func() bool
 
+	// PadSilence toggle ("Тишина по краям"). Same shape as
+	// autostart: OnTogglePadSilence flips and returns the new state;
+	// IsPadSilenceOn reports the initial value at render time.
+	OnTogglePadSilence func() bool
+	IsPadSilenceOn     func() bool
+
 	// macOS Privacy panes (System Settings deep-links). Non-nil only
 	// on darwin; renderers must hide the Permissions submenu when both
 	// are nil (Linux has no TCC-style permission gate to surface).
