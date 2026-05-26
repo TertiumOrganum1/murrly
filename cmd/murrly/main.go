@@ -275,6 +275,29 @@ func main() {
 		}
 	}()
 
+	// Ctrl+<hotkey> triggers manual reprocess. Separate Listener because
+	// X11 routes by exact modifier state — sharing a grab with the
+	// push-to-talk key would lose either the bare or the modified
+	// variant. Registration failure (e.g. another app owns the chord)
+	// is non-fatal: reprocess stays reachable via the tray/dock menu.
+	if reprocessHk, err := hotkey.NewWithCtrl(cfg.Hotkey.Key); err != nil {
+		log.Printf("reprocess hotkey: %v — menu item remains the only way to trigger it", err)
+	} else {
+		go reprocessHk.Start()
+		go func() {
+			for e := range reprocessHk.Events() {
+				if e != hotkey.EventDown {
+					continue
+				}
+				select {
+				case events <- app.EventReprocess:
+				default:
+					log.Printf("reprocess: event channel full, hotkey press ignored")
+				}
+			}
+		}()
+	}
+
 	go a.Run(ctx, events)
 
 	// Dock right-click menu (macOS only) — same Actions as the tray, so
