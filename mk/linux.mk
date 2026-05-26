@@ -19,11 +19,36 @@ build: whisper
 	LIBRARY_PATH="$(LIBRARY_PATH)" \
 	go build -ldflags "-extldflags '$(CUDA_LDFLAGS)'" -o $(BIN) ./cmd/murrly
 
+# test runs the full Go test suite with the same linker paths as build,
+# so the cgo-using packages (transcriber, anything else hitting
+# libwhisper / libggml) can resolve their externals. Without these env
+# vars `go test ./...` from a bare shell fails on internal/transcriber
+# even though the code is fine — the linker just can't find the
+# vendored whisper.cpp static libs.
+test: whisper
+	C_INCLUDE_PATH="$(INCLUDE_PATH)" \
+	LIBRARY_PATH="$(LIBRARY_PATH)" \
+	go test -ldflags "-extldflags '$(CUDA_LDFLAGS)'" ./...
+
 install: build
 	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" scripts/install-linux.sh
 
 start:
 	scripts/start-linux.sh
+
+# stop / restart — single-command wrappers around the kill+install+start
+# cycle so a tooling-agnostic caller (CI, editor task runner, the
+# Claude permissions allow-list) can redeploy Murrly without composing
+# the steps by hand. restart is the common "I changed code, deploy
+# it" target: kill the running binary, rebuild via install's deps,
+# launch the fresh one.
+stop:
+	@-pkill -x murrly 2>/dev/null || true
+
+restart:
+	@-pkill -x murrly 2>/dev/null || true
+	@$(MAKE) install
+	@scripts/start-linux.sh
 
 autostart: build
 	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" AUTOSTART=1 scripts/install-linux.sh

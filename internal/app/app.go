@@ -110,14 +110,16 @@ const (
 	// 30 s chunk boundary on a different sample of the audio and
 	// produce a different decode path even at T=0.
 	reprocessSilencePadSec = 1.0
-	// baselineSilencePadSec — added to both ends of every clip when
-	// the pad_silence option is on, including the very first
-	// transcription. Each reprocess click stacks its own
-	// reprocessSilencePadSec on top of the baseline at the start;
-	// the trailing pad stays at the baseline regardless of reprocess
-	// count (the trailer's job is to keep the last word from
-	// touching the chunk boundary, not to perturb the search).
-	baselineSilencePadSec = 1.0
+	// baselineSilencePadStartSec / baselineSilencePadEndSec —
+	// asymmetric pads added when the pad_silence option is on. The
+	// leading pad anchors the chunk boundary before the first word;
+	// the trailing pad is slightly longer because Whisper has a
+	// stronger tendency to clip the last token than the first.
+	// Each reprocess click stacks its own reprocessSilencePadSec on
+	// top of the leading baseline; the trailing pad stays put
+	// regardless of reprocess count.
+	baselineSilencePadStartSec = 1.0
+	baselineSilencePadEndSec   = 1.25
 )
 
 func New(cfg Config) *App {
@@ -198,7 +200,7 @@ func (a *App) finish() {
 
 	toTranscribe := pcm
 	if a.padSilence.Load() {
-		toTranscribe = padPCM(pcm, baselineSilencePadSec, baselineSilencePadSec)
+		toTranscribe = padPCM(pcm, baselineSilencePadStartSec, baselineSilencePadEndSec)
 	}
 	a.transcribeAndPaste(toTranscribe)
 }
@@ -221,8 +223,8 @@ func (a *App) reprocess() {
 	startPad := reprocessSilencePadSec * float64(a.reprocessAttempts)
 	endPad := 0.0
 	if a.padSilence.Load() {
-		startPad += baselineSilencePadSec
-		endPad = baselineSilencePadSec
+		startPad += baselineSilencePadStartSec
+		endPad = baselineSilencePadEndSec
 	}
 	padded := padPCM(a.lastPCM, startPad, endPad)
 	origSec := float64(len(a.lastPCM)) / float64(pcmSampleRateHz)

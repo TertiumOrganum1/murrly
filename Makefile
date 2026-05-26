@@ -14,7 +14,7 @@ else
   $(error Unsupported OS: $(UNAME_S))
 endif
 
-.PHONY: all whisper model build install start autostart uninstall-autostart clean icons
+.PHONY: all whisper model build test install start stop restart autostart uninstall-autostart clean icons
 
 all: build
 
