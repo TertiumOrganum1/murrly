@@ -3,6 +3,7 @@
 package clipboard
 
 import (
+	"bytes"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -11,20 +12,48 @@ import (
 func (c *Clipboard) Save() (Saved, error) {
 	s := Saved{}
 
-	text, ok, err := readSelection("clipboard")
+	targets, err := readTargets("clipboard")
 	if err != nil {
-		return s, fmt.Errorf("read clipboard: %w", err)
+		return s, fmt.Errorf("read clipboard targets: %w", err)
 	}
-	s.Text = text
-	s.HasContent = ok
+	if len(targets) > 0 {
+		s.HasContent = true
+		// Pick a non-text MIME (image/png from screenshots, etc.) if
+		// the owner advertises one — Save the raw bytes so Restore can
+		// re-publish them. Falling through to xclip's default text
+		// output would corrupt binary data to UTF-8 mush, which is
+		// what was killing user screenshots after a dictation cycle.
+		if binTarget := pickBinaryTarget(targets); binTarget != "" {
+			data, err := exec.Command("xclip", "-selection", "clipboard", "-t", binTarget, "-o").Output()
+			if err != nil {
+				return s, fmt.Errorf("read clipboard %s: %w", binTarget, err)
+			}
+			s.Binary = data
+			s.Target = binTarget
+		} else {
+			out, err := exec.Command("xclip", "-selection", "clipboard", "-o").Output()
+			if err != nil {
+				return s, fmt.Errorf("read clipboard text: %w", err)
+			}
+			s.Text = string(out)
+		}
+	}
 
 	if c.RestorePrimary {
-		ptext, pok, err := readSelection("primary")
+		// X11 primary selection is almost always plain text
+		// (highlight-to-copy); skip the binary detour.
+		ptargets, err := readTargets("primary")
 		if err != nil {
-			return s, fmt.Errorf("read primary: %w", err)
+			return s, fmt.Errorf("read primary targets: %w", err)
 		}
-		s.Primary = ptext
-		s.HasPrimary = pok
+		if len(ptargets) > 0 {
+			out, err := exec.Command("xclip", "-selection", "primary", "-o").Output()
+			if err != nil {
+				return s, fmt.Errorf("read primary: %w", err)
+			}
+			s.Primary = string(out)
+			s.HasPrimary = true
+		}
 	}
 	return s, nil
 }
@@ -34,12 +63,17 @@ func (c *Clipboard) Set(text string) error {
 }
 
 func (c *Clipboard) Restore(s Saved) error {
-	if s.HasContent {
+	switch {
+	case !s.HasContent:
+		_ = clearSelection("clipboard")
+	case s.Target != "" && len(s.Binary) > 0:
+		if err := writeSelectionBinary("clipboard", s.Target, s.Binary); err != nil {
+			return fmt.Errorf("restore clipboard %s: %w", s.Target, err)
+		}
+	default:
 		if err := writeSelection("clipboard", s.Text); err != nil {
 			return fmt.Errorf("restore clipboard: %w", err)
 		}
-	} else {
-		_ = clearSelection("clipboard")
 	}
 	if c.RestorePrimary && s.HasPrimary {
 		if err := writeSelection("primary", s.Primary); err != nil {
@@ -49,21 +83,49 @@ func (c *Clipboard) Restore(s Saved) error {
 	return nil
 }
 
-func readSelection(sel string) (string, bool, error) {
-	targets, err := exec.Command("xclip", "-selection", sel, "-t", "TARGETS", "-o").Output()
+// readTargets returns the non-service MIME targets advertised by the
+// current selection owner, or an empty slice when the selection is
+// empty (xclip returns non-zero exit then — we treat that as "no
+// content" rather than an error).
+func readTargets(sel string) ([]string, error) {
+	out, err := exec.Command("xclip", "-selection", sel, "-t", "TARGETS", "-o").Output()
 	if err != nil {
-		// xclip returns non-zero when selection is empty.
-		return "", false, nil
+		return nil, nil
 	}
-	parsed := parseTargets(string(targets))
-	if len(parsed) == 0 {
-		return "", false, nil
+	return parseTargets(string(out)), nil
+}
+
+// pickBinaryTarget returns a target name suitable for round-tripping
+// non-text payloads. Image types come first because that's the
+// screenshot-then-dictate case the user actually hit; anything other
+// than the standard text targets is acceptable as a fallback. Empty
+// string means "this clipboard is text — go through the text path".
+func pickBinaryTarget(targets []string) string {
+	priorities := []string{
+		"image/png", "image/jpeg", "image/jpg",
+		"image/bmp", "image/gif", "image/webp", "image/tiff",
+		"application/pdf",
 	}
-	out, err := exec.Command("xclip", "-selection", sel, "-o").Output()
-	if err != nil {
-		return "", true, err
+	for _, p := range priorities {
+		for _, t := range targets {
+			if t == p {
+				return t
+			}
+		}
 	}
-	return string(out), true, nil
+	for _, t := range targets {
+		if !isTextTarget(t) {
+			return t
+		}
+	}
+	return ""
+}
+
+func isTextTarget(t string) bool {
+	if strings.HasPrefix(t, "text/") {
+		return true
+	}
+	return t == "STRING" || t == "UTF8_STRING" || t == "COMPOUND_TEXT"
 }
 
 // writeSelection writes `text` into the X selection and detaches xclip into
@@ -77,7 +139,21 @@ func writeSelection(sel, text string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	go cmd.Wait() // reap once xclip loses ownership and exits
+	go cmd.Wait()
+	return nil
+}
+
+// writeSelectionBinary mirrors writeSelection for arbitrary MIME types —
+// xclip's -t flag advertises the given target so paste requests for
+// that MIME are honoured. Same fork-and-detach pattern: xclip stays
+// alive holding the selection until a future Set/Restore replaces it.
+func writeSelectionBinary(sel, target string, data []byte) error {
+	cmd := exec.Command("xclip", "-selection", sel, "-t", target, "-i")
+	cmd.Stdin = bytes.NewReader(data)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
 	return nil
 }
 
