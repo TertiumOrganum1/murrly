@@ -8,8 +8,10 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tertiumorganum1/murrly/internal/app"
 	"github.com/tertiumorganum1/murrly/internal/autostart"
@@ -21,8 +23,10 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/macospermissions"
 	"github.com/tertiumorganum1/murrly/internal/menuactions"
 	"github.com/tertiumorganum1/murrly/internal/modelinfo"
+	"github.com/tertiumorganum1/murrly/internal/multiinfer"
 	"github.com/tertiumorganum1/murrly/internal/overlay"
 	"github.com/tertiumorganum1/murrly/internal/paster"
+	"github.com/tertiumorganum1/murrly/internal/picker"
 	"github.com/tertiumorganum1/murrly/internal/paths"
 	"github.com/tertiumorganum1/murrly/internal/recorder"
 	"github.com/tertiumorganum1/murrly/internal/transcriber"
@@ -84,19 +88,64 @@ func main() {
 		log.Printf("mic probe: %v", err)
 	}
 
-	tr, err := transcriber.New(transcriber.Config{
+	trCfg := transcriber.Config{
 		ModelPath:     cfg.Whisper.ModelPath,
 		Language:      cfg.Whisper.Language,
 		BeamSize:      cfg.Whisper.BeamSize,
 		BeamAdaptive:  cfg.Whisper.BeamAdaptive,
 		InitialPrompt: cfg.Whisper.InitialPrompt,
-	})
-	if err != nil {
-		log.Fatalf("transcriber: %v", err)
 	}
-	loader := newTranscriberLoader(tr, cfg.Whisper)
-	// loader.tr is closed (via Reload's old.Close()) on every model swap;
-	// the final one shuts down at program exit when the process dies.
+	// Exactly one inference engine is built, by count:
+	//   count == 1 → single in-process Transcriber (with model hot-swap).
+	//   count  > 1 → multiinfer.Runner (one model, sequential variants).
+	// Building only one avoids loading the model twice. The active
+	// engine's model swap / config reload is wired below through the
+	// shared menu callbacks.
+	var loader *transcriberLoader
+	var multiRunner *multiinfer.Runner
+	scoreMode := multiinfer.ParseScoreMode(cfg.Whisper.ScoringMode)
+	if n := cfg.Whisper.MultiInferenceCount; n > 1 {
+		multiRunner, err = multiinfer.New(trCfg, n, scoreMode)
+		if err != nil {
+			log.Fatalf("multi-inference: %v", err)
+		}
+		log.Printf("multi-inference: %d sequential variants per recording (model %s, scoring %s)", n, cfg.Whisper.Model, scoreMode)
+	} else {
+		tr, terr := transcriber.New(trCfg)
+		if terr != nil {
+			log.Fatalf("transcriber: %v", terr)
+		}
+		loader = newTranscriberLoader(tr, cfg.Whisper)
+	}
+
+	// switchModel / reloadConfig route the model-picker and reload-config
+	// menu actions to whichever engine is active.
+	switchModel := func(name string) error {
+		if multiRunner != nil {
+			dir, derr := paths.ModelsDir()
+			if derr != nil {
+				return derr
+			}
+			return multiRunner.Reload(filepath.Join(dir, "ggml-"+name+".bin"))
+		}
+		return loader.Reload(name)
+	}
+	reloadConfig := func() error {
+		if multiRunner != nil {
+			newCfg, lerr := config.Load(cfgPath)
+			if lerr != nil {
+				return lerr
+			}
+			return multiRunner.ReloadConfig(transcriber.Config{
+				ModelPath:     newCfg.Whisper.ModelPath,
+				Language:      newCfg.Whisper.Language,
+				BeamSize:      newCfg.Whisper.BeamSize,
+				BeamAdaptive:  newCfg.Whisper.BeamAdaptive,
+				InitialPrompt: newCfg.Whisper.InitialPrompt,
+			})
+		}
+		return loader.ReloadConfig(cfgPath)
+	}
 
 	cb := clipboard.New()
 	cb.RestorePrimary = cfg.Output.RestorePrimary
@@ -139,7 +188,7 @@ func main() {
 				return
 			}
 			name := presentModelNames[index]
-			if err := loader.Reload(name); err != nil {
+			if err := switchModel(name); err != nil {
 				log.Printf("model pick: %v", err)
 				return
 			}
@@ -152,7 +201,7 @@ func main() {
 		ModelLabels:      presentModelLabels,
 		ActiveModelIndex: indexOf(presentModelNames, cfg.Whisper.Model),
 		OnReloadConfig: func() {
-			if err := loader.ReloadConfig(cfgPath); err != nil {
+			if err := reloadConfig(); err != nil {
 				log.Printf("reload config: %v", err)
 			}
 		},
@@ -221,9 +270,29 @@ func main() {
 		}
 		actions.OnOpenAccessibility = func() { openPrivacyPane("Accessibility") }
 	}
+	// Scoring-mode menu (multi-inference only): switch live between the
+	// combined blend, Whisper confidence alone, and the text-shape
+	// heuristic alone — and persist the choice. Single-pass mode has no
+	// variants to rank, so the group stays hidden there.
+	if multiRunner != nil {
+		actions.ScoringLabels = scoringModeLabels
+		actions.ActiveScoringIndex = scoringIndexOf(scoreMode)
+		actions.OnPickScoringMode = func(index int) {
+			if index < 0 || index >= len(scoringModeOrder) {
+				return
+			}
+			mode := scoringModeOrder[index]
+			multiRunner.SetScoreMode(mode)
+			if err := persistScoringMode(cfgPath, cfg, mode.String()); err != nil {
+				log.Printf("scoring mode persist: %v", err)
+			}
+			cfg.Whisper.ScoringMode = mode.String()
+			log.Printf("scoring mode -> %s (applies to next recording / Ctrl+F12 batch)", mode)
+		}
+	}
 	t = tray.New(icons, actions)
 
-	a = app.New(app.Config{
+	appCfg := app.Config{
 		Recorder:    recorder.New(),
 		Transcriber: loader,
 		Clipboard:   clipAdapter{cb},
@@ -256,7 +325,14 @@ func main() {
 			older, _ := first(snap, 2)
 			dockmenu.SetTranscripts(latest, prev, older)
 		},
-	})
+	}
+	// Multi-inference takes over the transcribe path when a runner was
+	// built (count > 1). The picker backs Alt+F12 selection.
+	if multiRunner != nil {
+		appCfg.MultiTranscriber = &multiAdapter{r: multiRunner}
+		appCfg.Picker = pickerAdapter{}
+	}
+	a = app.New(appCfg)
 
 	hk, err := hotkey.New(cfg.Hotkey.Key)
 	if err != nil {
@@ -298,6 +374,31 @@ func main() {
 		}()
 	}
 
+	// Ctrl+F11 opens the multi-inference picker over the cached variants.
+	// A fixed key distinct from push-to-talk (F12) and reprocess
+	// (Ctrl+F12); Alt and Ctrl+Alt variants of F12 turned out to be
+	// grabbed by the desktop environment. Wired only when
+	// multi-inference is active — without a runner there's nothing to
+	// pick. Non-fatal registration like the others.
+	if multiRunner != nil {
+		if pickHk, err := hotkey.NewWithCtrl("F11"); err != nil {
+			log.Printf("picker hotkey: %v", err)
+		} else {
+			go pickHk.Start()
+			go func() {
+				for e := range pickHk.Events() {
+					if e != hotkey.EventDown {
+						continue
+					}
+					select {
+					case events <- app.EventPickCandidate:
+					default:
+					}
+				}
+			}()
+		}
+	}
+
 	go a.Run(ctx, events)
 
 	// Dock right-click menu (macOS only) — same Actions as the tray, so
@@ -319,6 +420,24 @@ func main() {
 
 	t.Run() // blocks until systray.Quit() is called
 	hk.Stop()
+}
+
+// scoringModeOrder fixes the menu row order; scoringModeLabels are the
+// matching tray labels (rendered as "Оценка: <label>"). Index i in the
+// menu maps to scoringModeOrder[i].
+var (
+	scoringModeOrder  = []multiinfer.ScoreMode{multiinfer.ScoreCombined, multiinfer.ScoreConfidence, multiinfer.ScoreHeuristic}
+	scoringModeLabels = []string{"вместе", "только Whisper", "только эвристика"}
+)
+
+// scoringIndexOf returns the menu row for a mode (0 = combined default).
+func scoringIndexOf(m multiinfer.ScoreMode) int {
+	for i, e := range scoringModeOrder {
+		if e == m {
+			return i
+		}
+	}
+	return 0
 }
 
 // presentModels returns the subset of modelinfo.Available whose model
@@ -428,4 +547,68 @@ func (a clipAdapter) Restore(saved any) error {
 		return nil
 	}
 	return a.Clipboard.Restore(s)
+}
+
+// multiAdapter bridges *multiinfer.Runner to app.MultiTranscriber,
+// translating multiinfer.Candidate into app.Variant.
+type multiAdapter struct{ r *multiinfer.Runner }
+
+func (m *multiAdapter) Count() int { return m.r.Count() }
+
+func (m *multiAdapter) Run(pcm []float32, leadOffsetSec float64) []app.Variant {
+	cands := m.r.Run(pcm, leadOffsetSec)
+	out := make([]app.Variant, len(cands))
+	for i, c := range cands {
+		out[i] = app.Variant{
+			Text:       c.Text,
+			Score:      c.Score,
+			Confidence: c.Confidence,
+			PadLeadSec: c.PadLeadSec,
+		}
+	}
+	return out
+}
+
+// pickerAdapter bridges the platform picker to app.Picker, rendering
+// each variant as a single truncated preview line. The variant our
+// ranking would auto-insert (highest score) is marked with a leading
+// star so the user can see which one the scoring chose.
+type pickerAdapter struct{}
+
+func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
+	best := bestVariant(variants)
+	opts := make([]string, len(variants))
+	for i, v := range variants {
+		p := variantPreview(v.Text)
+		if i == best {
+			p = "★ " + p
+		}
+		opts[i] = p
+	}
+	return picker.Pick("", opts)
+}
+
+// bestVariant returns the index of the highest-scoring variant (the one
+// auto-inserted). -1 only for an empty slice.
+func bestVariant(vs []app.Variant) int {
+	best := -1
+	for i := range vs {
+		if best < 0 || vs[i].Score > vs[best].Score {
+			best = i
+		}
+	}
+	return best
+}
+
+// variantPreview collapses whitespace and truncates to a single line for
+// the picker list (full multi-line text doesn't render well in a zenity
+// cell).
+func variantPreview(text string) string {
+	compact := strings.Join(strings.Fields(text), " ")
+	const limit = 140
+	if utf8.RuneCountInString(compact) <= limit {
+		return compact
+	}
+	runes := []rune(compact)
+	return string(runes[:limit]) + "…"
 }

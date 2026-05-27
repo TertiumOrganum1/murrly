@@ -26,6 +26,20 @@ static void vi_enable_detectable_autorepeat(Display* display) {
 	Bool supported = False;
 	XkbSetDetectableAutoRepeat(display, True, &supported);
 }
+
+// vi_x_error_handler swallows X protocol errors instead of letting
+// Xlib's default handler call exit(). The one we actually expect is
+// BadAccess from XGrabKey when a key+modifier combo is already grabbed
+// by the window manager or another client (e.g. Alt+F12 taken by the
+// DE). A failed grab just means that binding won't fire; the process —
+// and the other, successful grabs — must survive.
+static int vi_x_error_handler(Display* d, XErrorEvent* e) {
+	return 0;
+}
+
+static void vi_install_error_handler(void) {
+	XSetErrorHandler(vi_x_error_handler);
+}
 */
 import "C"
 
@@ -78,6 +92,14 @@ func NewWithCtrl(key string) (*Listener, error) {
 	return newListener(key, C.ControlMask)
 }
 
+// NewWithCtrlAlt creates a Listener bound to Ctrl+Alt+<key>
+// (Control+Mod1). Used as the multi-inference picker hotkey — a
+// three-key combo that's far less likely to collide with a window-
+// manager shortcut than plain Alt+<key> (which Cinnamon already grabs).
+func NewWithCtrlAlt(key string) (*Listener, error) {
+	return newListener(key, C.ControlMask|C.Mod1Mask)
+}
+
 func newListener(key string, modifier C.uint) (*Listener, error) {
 	sym, ok := x11Keysyms[strings.ToLower(strings.TrimSpace(key))]
 	if !ok {
@@ -100,6 +122,9 @@ func (l *Listener) Start() {
 	if display == nil {
 		return
 	}
+	// Make grab failures (BadAccess on an already-taken combo) non-fatal
+	// instead of letting Xlib's default handler exit the process.
+	C.vi_install_error_handler()
 	l.display = display
 	defer func() {
 		C.XCloseDisplay(display)

@@ -18,6 +18,10 @@ build: whisper
 	C_INCLUDE_PATH="$(INCLUDE_PATH)" \
 	LIBRARY_PATH="$(LIBRARY_PATH)" \
 	go build -ldflags "-extldflags '$(CUDA_LDFLAGS)'" -o $(BIN) ./cmd/murrly
+	# The multi-inference picker is a standalone Fyne GUI (separate binary
+	# because systray and a Fyne window can't share the main OS thread).
+	# Pure Go + OpenGL — no whisper/CUDA linkage, so no special env needed.
+	go build -o bin/picker ./cmd/picker
 
 # test runs the full Go test suite with the same linker paths as build,
 # so the cgo-using packages (transcriber, anything else hitting

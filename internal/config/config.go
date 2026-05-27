@@ -55,6 +55,20 @@ type WhisperConfig struct {
 	// survives restarts; flipped at runtime via the tray's "Тишина
 	// по краям" toggle.
 	PadSilence    bool   `toml:"pad_silence"`
+	// MultiInferenceCount — how many parallel inference variants to run
+	// per recording. 1 = single pass (current behavior, no picker).
+	// 2..8 = that many Whisper contexts run the same audio with
+	// different leading-silence shifts; the best-scoring result is
+	// inserted and the rest are cached for the Alt+F12 picker. Clamped
+	// to [1,8] on load. Platform-tuned default (Linux 4, macOS 1).
+	MultiInferenceCount int `toml:"multi_inference_count"`
+	// ScoringMode picks how multi-inference ranks its variants and which
+	// one is auto-inserted: "combined" (Whisper confidence + text-shape
+	// heuristic, the default), "confidence" (Whisper probability only),
+	// or "heuristic" (text-shape only). Switchable live from the tray.
+	// Empty is normalized to "combined" on load. Ignored when
+	// multi_inference_count == 1.
+	ScoringMode   string `toml:"scoring_mode"`
 	InitialPrompt string `toml:"initial_prompt"`
 }
 
@@ -78,10 +92,12 @@ func defaults() Config {
 			Device:        "cuda",
 			ComputeType:   "float16",
 			Language:      "",
-			BeamSize:      defaultBeamSize(), // platform-tuned: Linux 5, macOS 1
-			BeamAdaptive:  false,             // opt-in; set true to get short=1 / long=5 dynamic switching
-			PadSilence:    false,             // opt-in; wrap every clip in 1 s silence padding
-			InitialPrompt: "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
+			BeamSize:            defaultBeamSize(),            // platform-tuned: Linux 5, macOS 1
+			BeamAdaptive:        false,                        // opt-in; set true to get short=1 / long=5 dynamic switching
+			PadSilence:          false,                        // opt-in; wrap every clip in 1 s silence padding
+			MultiInferenceCount: defaultMultiInferenceCount(), // platform-tuned: Linux 4, macOS 1
+			ScoringMode:         "combined",                   // confidence + heuristic blend; switchable from the tray
+			InitialPrompt:       "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
 		},
 		// PasteDelayMs sits between Set-clipboard / Cmd-V and the Restore-clipboard
 		// step. Too short and the focused app reads the restored (old) clipboard
@@ -126,6 +142,19 @@ func Load(path string) (Config, error) {
 		// active model" (-1).
 		cfg.Whisper.Model = "large-v3"
 		cfg.Whisper.ModelPath = filepath.Join(dir, "ggml-"+cfg.Whisper.Model+".bin")
+	}
+
+	// Clamp multi-inference count into the supported range. 0 (unset in
+	// an old config) becomes the platform default; anything past 8 is
+	// capped to keep VRAM bounded.
+	if cfg.Whisper.MultiInferenceCount == 0 {
+		cfg.Whisper.MultiInferenceCount = defaultMultiInferenceCount()
+	}
+	if cfg.Whisper.MultiInferenceCount < 1 {
+		cfg.Whisper.MultiInferenceCount = 1
+	}
+	if cfg.Whisper.MultiInferenceCount > 8 {
+		cfg.Whisper.MultiInferenceCount = 8
 	}
 
 	expandPaths(&cfg)

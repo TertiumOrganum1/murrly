@@ -98,23 +98,32 @@ func (t *Tray) onReady() {
 	// the first decode dropped punctuation or otherwise looks bad.
 	reprocessItem := systray.AddMenuItem("Перепроцессить последнее", "Прогнать последнюю запись через Whisper ещё раз (со сдвигом окна)")
 
-	systray.AddSeparator()
-
-	// Hide the model picker when fewer than 2 models are available —
-	// there's nothing to pick between.
+	// Model picker. Cinnamon/AppIndicator renders NESTED submenus
+	// unreliably — they collapse to an empty little square (the bug the
+	// user hit). So the model choices live as FLAT top-level checkable
+	// items ("Модель: <name>") instead of under a "Модель ▸" submenu;
+	// top-level checkboxes render fine (same as the autostart toggle).
+	// Hidden entirely when fewer than 2 models are present.
 	var modelItems []*systray.MenuItem
 	if len(t.actions.ModelLabels) >= 2 {
-		// AddSubMenuItemCheckbox is required on Linux: AddSubMenuItem
-		// creates items with toggle-type="" in dbusmenu, which
-		// Cinnamon/AppIndicator renders without their label. The
-		// checkbox variant also lets Check()/Uncheck() actually move
-		// the visible checkmark, which is a no-op on Linux for
-		// non-checkbox items (systray.go:172, 211).
-		modelHeader := systray.AddMenuItem("Модель", "Выбрать модель Whisper")
+		systray.AddSeparator()
 		modelItems = make([]*systray.MenuItem, len(t.actions.ModelLabels))
 		for i, lbl := range t.actions.ModelLabels {
 			checked := i == t.actions.ActiveModelIndex
-			modelItems[i] = modelHeader.AddSubMenuItemCheckbox(lbl, "", checked)
+			modelItems[i] = systray.AddMenuItemCheckbox("Модель: "+lbl, "Переключить модель Whisper", checked)
+		}
+	}
+
+	// Scoring-mode picker (multi-inference only). Flat checkable items
+	// like the model picker — same Cinnamon nested-submenu bug applies.
+	// Omitted when no callback is wired (single-pass / non-Linux).
+	var scoringItems []*systray.MenuItem
+	if t.actions.OnPickScoringMode != nil && len(t.actions.ScoringLabels) >= 2 {
+		systray.AddSeparator()
+		scoringItems = make([]*systray.MenuItem, len(t.actions.ScoringLabels))
+		for i, lbl := range t.actions.ScoringLabels {
+			checked := i == t.actions.ActiveScoringIndex
+			scoringItems[i] = systray.AddMenuItemCheckbox("Оценка: "+lbl, "Как выбирается лучший вариант распознавания", checked)
 		}
 	}
 
@@ -154,6 +163,27 @@ func (t *Tray) onReady() {
 			for range mi.ClickedCh {
 				if t.actions.OnPickModel != nil {
 					t.actions.OnPickModel(idx)
+				}
+			}
+		}()
+	}
+	// Scoring-mode items behave as a radio group: clicking one fires the
+	// callback and moves the checkmark to it (clearing the others). Each
+	// item closes over the full slice so it can re-tick the group.
+	for i, item := range scoringItems {
+		idx := i
+		mi := item
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnPickScoringMode != nil {
+					t.actions.OnPickScoringMode(idx)
+				}
+				for j, it := range scoringItems {
+					if j == idx {
+						it.Check()
+					} else {
+						it.Uncheck()
+					}
 				}
 			}
 		}()

@@ -21,6 +21,15 @@ type Actions struct {
 	ModelLabels      []string
 	ActiveModelIndex int
 
+	// Scoring-mode picker (multi-inference only). Same flat-checkable
+	// shape as the model picker: ScoringLabels seed the items, clicking
+	// item i fires OnPickScoringMode(i), ActiveScoringIndex is the row
+	// checked on first paint. Left nil / empty in single-pass mode and on
+	// platforms without multi-inference, so the renderer omits the group.
+	OnPickScoringMode  func(index int)
+	ScoringLabels      []string
+	ActiveScoringIndex int
+
 	// OnReprocess re-runs the last recorded audio through the
 	// transcriber with a small silence prefix that perturbs the
 	// decoder's chunk-boundary alignment — same trick as the

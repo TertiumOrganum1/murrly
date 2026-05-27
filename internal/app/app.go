@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync/atomic"
 	"time"
@@ -28,8 +29,15 @@ const (
 	// decode result. Used as a manual "try again" when the user
 	// notices a bad transcription. Ignored if no audio has been
 	// recorded yet or if the app is currently busy (recording /
-	// transcribing).
+	// transcribing). In multi-inference mode it runs a fresh batch of
+	// variants (continuing the leading-silence offset) and inserts the
+	// best, appending to the cached set.
 	EventReprocess
+	// EventPickCandidate (Alt+F12) opens the picker over the variants
+	// already computed for the last recording — no new inference. The
+	// user-chosen variant replaces the inserted text. No-op when there
+	// are no cached variants or no picker is wired (non-Linux).
+	EventPickCandidate
 )
 
 type Recorder interface {
@@ -39,6 +47,33 @@ type Recorder interface {
 
 type Transcriber interface {
 	Transcribe([]float32) (string, error)
+}
+
+// Variant is one multi-inference candidate surfaced to the app: the
+// transcribed text plus the scores used to rank it. The app stays
+// agnostic about how variants are produced or scored — that's
+// MultiTranscriber's job.
+type Variant struct {
+	Text       string
+	Score      float64
+	Confidence float64
+	PadLeadSec float64
+}
+
+// MultiTranscriber runs several inference variants over one sample and
+// returns them ranked best-first. leadOffsetSec is added to every
+// variant's leading-silence shift so successive reprocess rounds explore
+// fresh chunk alignments instead of repeating the first batch. nil in
+// Config means single-pass mode (use Transcriber).
+type MultiTranscriber interface {
+	Run(pcm []float32, leadOffsetSec float64) []Variant
+	Count() int
+}
+
+// Picker shows the cached variants and returns the chosen index, or
+// ok=false if the user cancelled or no picker UI is available.
+type Picker interface {
+	Pick(variants []Variant) (index int, ok bool)
 }
 
 // Clipboard returns an opaque snapshot from Save that is passed back to
@@ -68,6 +103,13 @@ type Config struct {
 	// is a valid no-op (and the default when AdjustText is nil).
 	AdjustText func(string) string
 	PasteDelay time.Duration
+	// MultiTranscriber, when non-nil, switches F12/Ctrl+F12 to
+	// multi-inference: run N variants, score, insert the best, cache the
+	// rest. nil → single-pass via Transcriber (current behavior).
+	MultiTranscriber MultiTranscriber
+	// Picker renders the cached variants for Alt+F12. nil → Alt+F12 is
+	// a no-op (e.g. non-Linux, or zenity unavailable).
+	Picker Picker
 	// PadSilence is the initial value of the live-toggle. When true,
 	// every transcribe call (including the first, not just reprocess
 	// retries) gets baselineSilencePadSec of leading and trailing
@@ -91,6 +133,15 @@ type App struct {
 	// chunk-boundary alignment differently and (hopefully) land on
 	// different decode paths.
 	reprocessAttempts int
+	// lastVariants holds every multi-inference variant computed for the
+	// current recording (across the initial F12 batch and any Ctrl+F12
+	// reprocess batches), ranked within each batch. Alt+F12's picker
+	// chooses from this set. Reset when finish() captures fresh audio.
+	lastVariants []Variant
+	// multiRound counts Ctrl+F12 reprocess batches for the current
+	// recording (0 = the initial F12 batch). Drives the leading-silence
+	// offset so each batch explores new chunk alignments.
+	multiRound int
 	// padSilence is the live state for the "pad every sample with 1 s
 	// silence at both ends" toggle (config.whisper.pad_silence).
 	// Read on the App goroutine in finish()/reprocess(); written from
@@ -120,6 +171,11 @@ const (
 	// regardless of reprocess count.
 	baselineSilencePadStartSec = 1.0
 	baselineSilencePadEndSec   = 1.25
+	// multiReprocessStepSec mirrors multiinfer's per-variant leading
+	// step. Each Ctrl+F12 reprocess batch offsets its variants by
+	// round * count * step so batches don't overlap the same chunk
+	// alignments. Kept in sync with multiinfer.padStepSec by value.
+	multiReprocessStepSec = 1.5
 )
 
 func New(cfg Config) *App {
@@ -165,6 +221,8 @@ func (a *App) handle(ev Event) {
 			a.setState(StateRecording)
 		case EventReprocess:
 			a.reprocess()
+		case EventPickCandidate:
+			a.pickCandidate()
 		}
 	case StateRecording:
 		if ev == EventKeyUp {
@@ -197,6 +255,13 @@ func (a *App) finish() {
 	// perturbation sequence.
 	a.lastPCM = pcm
 	a.reprocessAttempts = 0
+	a.multiRound = 0
+	a.lastVariants = nil
+
+	if a.cfg.MultiTranscriber != nil {
+		a.runMulti(pcm, 0, "recording")
+		return
+	}
 
 	toTranscribe := pcm
 	if a.padSilence.Load() {
@@ -219,6 +284,17 @@ func (a *App) reprocess() {
 		log.Printf("reprocess: no saved audio to re-run")
 		return
 	}
+
+	if a.cfg.MultiTranscriber != nil {
+		// New batch of variants. Continue the leading-silence offset
+		// past everything already explored so this batch lands on fresh
+		// chunk alignments instead of repeating the first four.
+		a.multiRound++
+		offset := float64(a.multiRound*a.cfg.MultiTranscriber.Count()) * multiReprocessStepSec
+		a.runMulti(a.lastPCM, offset, fmt.Sprintf("reprocess #%d", a.multiRound))
+		return
+	}
+
 	a.reprocessAttempts++
 	startPad := reprocessSilencePadSec * float64(a.reprocessAttempts)
 	endPad := 0.0
@@ -265,6 +341,72 @@ func (a *App) transcribeAndPaste(pcm []float32) {
 		a.setState(StateIdle)
 		return
 	}
+	if err := a.insertText(text); err != nil {
+		log.Printf("insert: %v", err)
+		a.setState(StateError)
+		return
+	}
+	a.setState(StateIdle)
+}
+
+// runMulti drives the multi-inference path: fan out N variants, log the
+// whole batch (label is "recording" or "reprocess #N"), insert the
+// best, and append the batch to lastVariants for the Alt+F12 picker.
+func (a *App) runMulti(pcm []float32, leadOffsetSec float64, label string) {
+	a.setState(StateTranscribing)
+	audioSec := float64(len(pcm)) / float64(pcmSampleRateHz)
+	t0 := time.Now()
+	results := a.cfg.MultiTranscriber.Run(pcm, leadOffsetSec)
+	took := time.Since(t0)
+
+	if len(results) == 0 {
+		log.Printf("%s: %.2fs — all variants empty/failed", label, audioSec)
+		a.setState(StateError)
+		return
+	}
+
+	base := len(a.lastVariants) // continuing variant numbering across batches
+	log.Printf("%s: %.2fs (%d variants, took=%v)", label, audioSec, len(results), took.Round(time.Millisecond))
+	for i, v := range results {
+		log.Printf("  variant %d (pad=%.2fs conf=%.2f score=%.2f): %q", base+i+1, v.PadLeadSec, v.Confidence, v.Score, v.Text)
+	}
+	a.lastVariants = append(a.lastVariants, results...)
+
+	best := results[0]
+	log.Printf("  -> selected variant %d (best score %.2f), inserted", base+1, best.Score)
+	if err := a.insertText(best.Text); err != nil {
+		log.Printf("insert: %v", err)
+		a.setState(StateError)
+		return
+	}
+	a.setState(StateIdle)
+}
+
+// pickCandidate (Alt+F12) opens the picker over the cached variants and
+// inserts the chosen one. No new inference.
+func (a *App) pickCandidate() {
+	if a.cfg.Picker == nil || len(a.lastVariants) == 0 {
+		return
+	}
+	idx, ok := a.cfg.Picker.Pick(a.lastVariants)
+	if !ok || idx < 0 || idx >= len(a.lastVariants) {
+		return
+	}
+	log.Printf("picker: user chose variant %d (score %.2f)", idx+1, a.lastVariants[idx].Score)
+	if err := a.insertText(a.lastVariants[idx].Text); err != nil {
+		log.Printf("insert: %v", err)
+	}
+}
+
+// insertText runs the shared insertion path: OnTranscript notification,
+// optional AdjustText hook, then the clipboard save / set / paste /
+// restore dance. Returns an error on clipboard/paste failure so the
+// caller can decide the resulting state; it does not touch state itself.
+// A failed Restore is logged but not fatal (the paste already landed).
+func (a *App) insertText(text string) error {
+	if text == "" {
+		return nil
+	}
 	if a.cfg.OnTranscript != nil {
 		a.cfg.OnTranscript(text)
 	}
@@ -274,25 +416,19 @@ func (a *App) transcribeAndPaste(pcm []float32) {
 
 	saved, err := a.cfg.Clipboard.Save()
 	if err != nil {
-		log.Printf("clipboard.Save: %v", err)
-		a.setState(StateError)
-		return
+		return fmt.Errorf("clipboard.Save: %w", err)
 	}
 	if err := a.cfg.Clipboard.Set(text); err != nil {
-		log.Printf("clipboard.Set: %v", err)
-		a.setState(StateError)
-		return
+		return fmt.Errorf("clipboard.Set: %w", err)
 	}
 	if err := a.cfg.Paster.Paste(); err != nil {
-		log.Printf("paster.Paste: %v", err)
-		a.setState(StateError)
-		return
+		return fmt.Errorf("paster.Paste: %w", err)
 	}
 	time.Sleep(a.cfg.PasteDelay)
 	if err := a.cfg.Clipboard.Restore(saved); err != nil {
 		log.Printf("clipboard.Restore: %v", err)
 	}
-	a.setState(StateIdle)
+	return nil
 }
 
 func (a *App) setState(s State) {

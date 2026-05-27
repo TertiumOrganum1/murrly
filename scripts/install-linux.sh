@@ -9,8 +9,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
 BIN_SRC="${BIN_SRC:-$REPO_ROOT/bin/murrly}"
+PICKER_SRC="${PICKER_SRC:-$REPO_ROOT/bin/picker}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 BIN_DEST="$BIN_DIR/$APP_ID"
+PICKER_DEST="$BIN_DIR/$APP_ID-picker"
 INSTALL_DATA_DIR="${INSTALL_DATA_DIR:-$HOME/.local/share/murrly}"
 
 APP_DIR="$HOME/.local/share/applications"
@@ -66,6 +68,14 @@ remove_legacy_service
 
 mkdir -p "$BIN_DIR" "$APP_DIR" "$INSTALL_DATA_DIR/models"
 install -m 0755 "$BIN_SRC" "$BIN_DEST"
+
+# The multi-inference variant picker, spawned by murrly via Ctrl+F11.
+# Optional: a single-model (count=1) install has no picker to run, but we
+# ship it whenever it was built so switching multi_inference_count later
+# Just Works without a reinstall.
+if [[ -x "$PICKER_SRC" ]]; then
+	install -m 0755 "$PICKER_SRC" "$PICKER_DEST"
+fi
 
 # Install the Linux-specific colored cat-head app icon at every size we
 # ship, so the DE can pick the correct resolution for the launcher, app

@@ -57,12 +57,22 @@ func New(key string) (*Listener, error) {
 // golang.design/x/hotkey's modifier list. Used for the reprocess
 // binding so it doesn't collide with the bare push-to-talk hotkey.
 func NewWithCtrl(key string) (*Listener, error) {
+	return newModified(key, gohotkey.ModCtrl)
+}
+
+// NewWithCtrlAlt creates a Listener bound to Ctrl+Alt(Option)+<key> on
+// macOS. Used for the multi-inference picker hotkey.
+func NewWithCtrlAlt(key string) (*Listener, error) {
+	return newModified(key, gohotkey.ModCtrl|gohotkey.ModOption)
+}
+
+func newModified(key string, mod gohotkey.Modifier) (*Listener, error) {
 	k, ok := keyMap[strings.ToLower(strings.TrimSpace(key))]
 	if !ok {
 		return nil, fmt.Errorf("hotkey: unknown key %q (supported: F1..F15)", key)
 	}
 	return &Listener{
-		hk:     gohotkey.New([]gohotkey.Modifier{gohotkey.ModCtrl}, k),
+		hk:     gohotkey.New([]gohotkey.Modifier{mod}, k),
 		events: make(chan Event, 8),
 		stop:   make(chan struct{}),
 	}, nil

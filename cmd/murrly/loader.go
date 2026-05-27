@@ -134,3 +134,16 @@ func persistPadSilence(cfgPath string, cfg config.Config, on bool) error {
 	defer f.Close()
 	return toml.NewEncoder(f).Encode(cfg)
 }
+
+// persistScoringMode writes the multi-inference scoring mode to
+// config.toml so the menu choice survives a restart. Same whole-struct
+// re-encode as the other persist helpers.
+func persistScoringMode(cfgPath string, cfg config.Config, mode string) error {
+	cfg.Whisper.ScoringMode = mode
+	f, err := os.Create(cfgPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}
