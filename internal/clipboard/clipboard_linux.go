@@ -4,10 +4,40 @@ package clipboard
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+// xclipReadTimeout caps every blocking xclip -o call. X11 selections are
+// served by the owning process, so a hung owner (dead screenshot tool,
+// stuck image paste, etc.) used to deadlock our whole insert flow — the
+// app goroutine sat in clipboard.Save waiting on xclip waiting on a
+// dead owner, and the tray icon was stuck on "transcribing" until the
+// user killed the orphan xclip processes by hand. Two seconds is more
+// than enough for any sane owner (even a 50 MB image round-trips in
+// under a second over the X socket); past that we give up and let the
+// dictation still get inserted with whatever clipboard state we have.
+const xclipReadTimeout = 2 * time.Second
+
+// xclipOutput runs `xclip args...` with a hard timeout and returns its
+// stdout. On timeout it logs once and returns context.DeadlineExceeded
+// (which callers translate into "no content, keep going" rather than a
+// fatal error).
+func xclipOutput(args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), xclipReadTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "xclip", args...).Output()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		log.Printf("clipboard: xclip %v timed out after %v — likely a hung selection owner; ignoring", args, xclipReadTimeout)
+		return nil, context.DeadlineExceeded
+	}
+	return out, err
+}
 
 func (c *Clipboard) Save() (Saved, error) {
 	s := Saved{}
@@ -24,18 +54,23 @@ func (c *Clipboard) Save() (Saved, error) {
 		// output would corrupt binary data to UTF-8 mush, which is
 		// what was killing user screenshots after a dictation cycle.
 		if binTarget := pickBinaryTarget(targets); binTarget != "" {
-			data, err := exec.Command("xclip", "-selection", "clipboard", "-t", binTarget, "-o").Output()
+			data, err := xclipOutput("-selection", "clipboard", "-t", binTarget, "-o")
 			if err != nil {
-				return s, fmt.Errorf("read clipboard %s: %w", binTarget, err)
+				// Read failed (hung owner, etc.) — don't error out the
+				// whole insert; just give up on saving this clipboard so
+				// the dictation still gets pasted.
+				s.HasContent = false
+			} else {
+				s.Binary = data
+				s.Target = binTarget
 			}
-			s.Binary = data
-			s.Target = binTarget
 		} else {
-			out, err := exec.Command("xclip", "-selection", "clipboard", "-o").Output()
+			out, err := xclipOutput("-selection", "clipboard", "-o")
 			if err != nil {
-				return s, fmt.Errorf("read clipboard text: %w", err)
+				s.HasContent = false
+			} else {
+				s.Text = string(out)
 			}
-			s.Text = string(out)
 		}
 	}
 
@@ -47,12 +82,12 @@ func (c *Clipboard) Save() (Saved, error) {
 			return s, fmt.Errorf("read primary targets: %w", err)
 		}
 		if len(ptargets) > 0 {
-			out, err := exec.Command("xclip", "-selection", "primary", "-o").Output()
-			if err != nil {
-				return s, fmt.Errorf("read primary: %w", err)
+			out, err := xclipOutput("-selection", "primary", "-o")
+			if err == nil {
+				s.Primary = string(out)
+				s.HasPrimary = true
 			}
-			s.Primary = string(out)
-			s.HasPrimary = true
+			// On error: leave HasPrimary false; Restore will skip primary.
 		}
 	}
 	return s, nil
@@ -88,7 +123,7 @@ func (c *Clipboard) Restore(s Saved) error {
 // empty (xclip returns non-zero exit then — we treat that as "no
 // content" rather than an error).
 func readTargets(sel string) ([]string, error) {
-	out, err := exec.Command("xclip", "-selection", sel, "-t", "TARGETS", "-o").Output()
+	out, err := xclipOutput("-selection", sel, "-t", "TARGETS", "-o")
 	if err != nil {
 		return nil, nil
 	}
