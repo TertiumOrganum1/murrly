@@ -11,7 +11,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tertiumorganum1/murrly/internal/app"
 	"github.com/tertiumorganum1/murrly/internal/autostart"
@@ -600,15 +599,11 @@ func bestVariant(vs []app.Variant) int {
 	return best
 }
 
-// variantPreview collapses whitespace and truncates to a single line for
-// the picker list (full multi-line text doesn't render well in a zenity
-// cell).
+// variantPreview collapses runs of whitespace (including segment-break
+// newlines from Whisper) into single spaces. The picker word-wraps and
+// caps each card at its own maxCardLines with an ellipsis, so we don't
+// truncate here — sending the full text lets a long dictation actually
+// fill those five lines instead of stopping at two.
 func variantPreview(text string) string {
-	compact := strings.Join(strings.Fields(text), " ")
-	const limit = 140
-	if utf8.RuneCountInString(compact) <= limit {
-		return compact
-	}
-	runes := []rune(compact)
-	return string(runes[:limit]) + "…"
+	return strings.Join(strings.Fields(text), " ")
 }
