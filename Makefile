@@ -2,7 +2,7 @@ SHELL := /bin/bash
 BIN := bin/murrly
 WHISPER_DIR := third_party/whisper.cpp
 WHISPER_BUILD := $(WHISPER_DIR)/build
-MODEL ?= large-v3
+MODEL ?= large-v3-turbo
 MODEL_DIR := models
 
 UNAME_S := $(shell uname -s)

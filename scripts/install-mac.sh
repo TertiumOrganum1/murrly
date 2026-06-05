@@ -43,6 +43,10 @@ fi
 # as a safety net for downstream tools that still expect it.
 METALLIB="$(find "$WHISPER_BUILD" -name '*.metallib' 2>/dev/null | head -n1 || true)"
 
+# The multi-inference picker (Ctrl+F11). Optional: if it's missing the app
+# still runs and Ctrl+F11 just no-ops. `make build` produces bin/picker.
+PICKER_SRC="$REPO_ROOT/bin/picker"
+
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -51,6 +55,9 @@ mkdir -p "$APP_TMP/Contents/MacOS" "$APP_TMP/Contents/Resources"
 
 sed "s/@@VERSION@@/$VERSION/g" "$INFO_TMPL" > "$APP_TMP/Contents/Info.plist"
 install -m 0755 "$BIN_SRC"  "$APP_TMP/Contents/MacOS/$BINARY_NAME"
+if [[ -x "$PICKER_SRC" ]]; then
+    install -m 0755 "$PICKER_SRC" "$APP_TMP/Contents/MacOS/murrly-picker"
+fi
 install -m 0644 "$ICNS_SRC" "$APP_TMP/Contents/Resources/$BINARY_NAME.icns"
 if [[ -n "$METALLIB" ]]; then
     install -m 0644 "$METALLIB" "$APP_TMP/Contents/Resources/$(basename "$METALLIB")"

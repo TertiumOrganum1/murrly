@@ -110,6 +110,12 @@ type Config struct {
 	// Picker renders the cached variants for Alt+F12. nil → Alt+F12 is
 	// a no-op (e.g. non-Linux, or zenity unavailable).
 	Picker Picker
+	// MultiInference is the initial state of the live multi-inference
+	// toggle. When MultiTranscriber is wired but this is false, F12 runs a
+	// single pass via Transcriber (no variant batch, no picker); when true
+	// it runs the full batch. Flipped at runtime via SetMultiInference.
+	// Ignored when MultiTranscriber is nil (nothing to toggle).
+	MultiInference bool
 	// PadSilence is the initial value of the live-toggle. When true,
 	// every transcribe call (including the first, not just reprocess
 	// retries) gets baselineSilencePadSec of leading and trailing
@@ -148,6 +154,11 @@ type App struct {
 	// the menu callback via SetPadSilence — atomic to avoid mutex
 	// scaffolding for a single boolean.
 	padSilence atomic.Bool
+	// multiOn is the live on/off for multi-inference (config.whisper.
+	// multi_inference). Read on the App goroutine in finish()/reprocess();
+	// written from the menu toggle via SetMultiInference — atomic, like
+	// padSilence, to avoid mutex scaffolding for a single boolean.
+	multiOn atomic.Bool
 }
 
 const (
@@ -184,6 +195,7 @@ func New(cfg Config) *App {
 	}
 	a := &App{cfg: cfg, state: StateIdle}
 	a.padSilence.Store(cfg.PadSilence)
+	a.multiOn.Store(cfg.MultiInference)
 	return a
 }
 
@@ -195,6 +207,22 @@ func (a *App) SetPadSilence(on bool) { a.padSilence.Store(on) }
 
 // PadSilenceOn returns the current pad-silence state for menu rendering.
 func (a *App) PadSilenceOn() bool { return a.padSilence.Load() }
+
+// SetMultiInference flips multi-inference at runtime. The menu toggle calls
+// this so the next F12 immediately picks up the new mode; main persists the
+// flag to config.toml separately so it survives a restart.
+func (a *App) SetMultiInference(on bool) { a.multiOn.Store(on) }
+
+// MultiInferenceOn reports the current multi-inference state for menu
+// rendering and for the finish()/reprocess() branch.
+func (a *App) MultiInferenceOn() bool { return a.multiOn.Load() }
+
+// multiActive is true only when a multi-inference engine is wired AND the
+// live toggle is on — the single condition both F12 (finish) and the manual
+// reprocess use to choose the variant-batch path over a single pass.
+func (a *App) multiActive() bool {
+	return a.cfg.MultiTranscriber != nil && a.multiOn.Load()
+}
 
 func (a *App) Run(ctx context.Context, events <-chan Event) {
 	a.setState(StateIdle)
@@ -258,7 +286,7 @@ func (a *App) finish() {
 	a.multiRound = 0
 	a.lastVariants = nil
 
-	if a.cfg.MultiTranscriber != nil {
+	if a.multiActive() {
 		a.runMulti(pcm, 0, "recording")
 		return
 	}
@@ -285,7 +313,7 @@ func (a *App) reprocess() {
 		return
 	}
 
-	if a.cfg.MultiTranscriber != nil {
+	if a.multiActive() {
 		// New batch of variants. Continue the leading-silence offset
 		// past everything already explored so this batch lands on fresh
 		// chunk alignments instead of repeating the first four.

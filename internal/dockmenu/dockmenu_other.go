@@ -9,3 +9,5 @@ func Install(*menuactions.Actions)                  {}
 func SetTranscripts(latest, previous, older string) {}
 func SetAutostart(enabled bool)                     {}
 func SetActiveModel(index int)                      {}
+func SetActiveScoring(index int)                    {}
+func SetMulti(enabled bool)                         {}

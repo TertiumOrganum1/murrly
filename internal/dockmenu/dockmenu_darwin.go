@@ -11,6 +11,8 @@ package dockmenu
 
 extern void murGoCopy(int index);
 extern void murGoPickModel(int index);
+extern void murGoPickScoring(int index);
+extern void murGoToggleMulti(void);
 extern void murGoToggleAutostart(void);
 extern void murGoOpenConfig(void);
 extern void murGoReloadConfig(void);
@@ -46,8 +48,15 @@ func Install(a *menuactions.Actions) {
 	for i, s := range a.ModelLabels {
 		cLabels[i] = C.CString(s)
 	}
+	cScoring := make([]*C.char, len(a.ScoringLabels))
+	for i, s := range a.ScoringLabels {
+		cScoring[i] = C.CString(s)
+	}
 	defer func() {
 		for _, p := range cLabels {
+			C.free(unsafe.Pointer(p))
+		}
+		for _, p := range cScoring {
 			C.free(unsafe.Pointer(p))
 		}
 	}()
@@ -55,10 +64,21 @@ func Install(a *menuactions.Actions) {
 	if len(cLabels) > 0 {
 		labelsPtr = (**C.char)(unsafe.Pointer(&cLabels[0]))
 	}
+	var scoringPtr **C.char
+	if len(cScoring) > 0 {
+		scoringPtr = (**C.char)(unsafe.Pointer(&cScoring[0]))
+	}
+
+	multiEnabled := C.int(0)
+	if a.IsMultiOn != nil && a.IsMultiOn() {
+		multiEnabled = 1
+	}
 
 	C.mur_dockmenu_install(
 		(*[0]byte)(C.murGoCopy),
 		(*[0]byte)(C.murGoPickModel),
+		(*[0]byte)(C.murGoPickScoring),
+		(*[0]byte)(C.murGoToggleMulti),
 		(*[0]byte)(C.murGoToggleAutostart),
 		(*[0]byte)(C.murGoOpenConfig),
 		(*[0]byte)(C.murGoReloadConfig),
@@ -68,6 +88,9 @@ func Install(a *menuactions.Actions) {
 		(*[0]byte)(C.murGoQuit),
 		labelsPtr,
 		C.int(len(cLabels)),
+		scoringPtr,
+		C.int(len(cScoring)),
+		multiEnabled,
 	)
 }
 
@@ -89,11 +112,29 @@ func SetAutostart(enabled bool) {
 	C.mur_dockmenu_set_autostart(v)
 }
 
+// SetMulti reflects the multi-inference on/off state in the Dock menu's
+// checkbox. Called from the toggle callback (from either menu) and seeded
+// once at startup.
+func SetMulti(enabled bool) {
+	v := C.int(0)
+	if enabled {
+		v = 1
+	}
+	C.mur_dockmenu_set_multi(v)
+}
+
 // SetActiveModel marks the model at the given index (matching the order
 // passed in Actions.ModelLabels) with a checkmark, clearing others.
 // Pass -1 to clear all.
 func SetActiveModel(index int) {
 	C.mur_dockmenu_set_model_index(C.int(index))
+}
+
+// SetActiveScoring marks the scoring mode at the given index (matching the
+// order passed in Actions.ScoringLabels) with a checkmark, clearing others.
+// Pass -1 to clear all.
+func SetActiveScoring(index int) {
+	C.mur_dockmenu_set_scoring_index(C.int(index))
 }
 
 // loadActions is the read-side companion to the Install snapshot, used
@@ -117,6 +158,20 @@ func murGoCopy(index C.int) {
 func murGoPickModel(index C.int) {
 	if a := loadActions(); a != nil && a.OnPickModel != nil {
 		a.OnPickModel(int(index))
+	}
+}
+
+//export murGoPickScoring
+func murGoPickScoring(index C.int) {
+	if a := loadActions(); a != nil && a.OnPickScoringMode != nil {
+		a.OnPickScoringMode(int(index))
+	}
+}
+
+//export murGoToggleMulti
+func murGoToggleMulti() {
+	if a := loadActions(); a != nil && a.OnToggleMulti != nil {
+		a.OnToggleMulti()
 	}
 }
 

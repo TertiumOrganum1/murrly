@@ -170,6 +170,20 @@ func (r *Runner) Run(pcm []float32, leadOffsetSec float64) []Candidate {
 	return ranked
 }
 
+// RunOne does a single inference pass over the PCM as-is — no leading-
+// silence perturbation, no variant batch, no scoring — and returns the
+// post-processed text. It backs the "multi-inference off" path: the same
+// model/session the variant batch uses, so toggling the feature live costs
+// nothing (no second model load). Caller-side padding (pad_silence /
+// reprocess silence) is applied before this, exactly as in the single-pass
+// engine.
+func (r *Runner) RunOne(pcm []float32) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	text, _, err := r.session.Run(pcm)
+	return text, err
+}
+
 // padPCM returns a new buffer with startSec of zero samples prepended
 // and endSec appended. Either may be 0.
 func padPCM(pcm []float32, startSec, endSec float64) []float32 {

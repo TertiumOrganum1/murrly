@@ -7,7 +7,7 @@ device = ""
 sample_rate = 16000
 
 [whisper]
-model_path = "~/.local/share/murrly/models/ggml-large-v3.bin"
+model_path = "~/.local/share/murrly/models/ggml-large-v3-turbo.bin"
 device = "cuda"
 compute_type = "float16"
 language = ""

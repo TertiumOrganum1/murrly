@@ -69,7 +69,15 @@ type WhisperConfig struct {
 	// Empty is normalized to "combined" on load. Ignored when
 	// multi_inference_count == 1.
 	ScoringMode   string `toml:"scoring_mode"`
-	InitialPrompt string `toml:"initial_prompt"`
+	// MultiInference is the live on/off switch for multi-inference. When
+	// multi_inference_count > 1 the engine is always built, but this flag
+	// decides whether F12 runs the full variant batch (true) or just a
+	// single pass over the original sample (false) — the latter avoids the
+	// extra latency and the Ctrl+F11 picker entirely. Default true; flipped
+	// at runtime via the "Множественное распознавание" menu toggle and
+	// persisted here. No effect when multi_inference_count == 1.
+	MultiInference bool   `toml:"multi_inference"`
+	InitialPrompt  string `toml:"initial_prompt"`
 }
 
 type OutputConfig struct {
@@ -82,9 +90,9 @@ func defaults() Config {
 		Hotkey: HotkeyConfig{Key: "F12", Mode: "push_to_talk"},
 		Audio:  AudioConfig{Device: "", SampleRate: 16000},
 		Whisper: WhisperConfig{
-			// Model = "" means "use the legacy default ggml-large-v3.bin".
+			// Model = "" means "use the default ggml-large-v3-turbo.bin".
 			// That matches what scripts/bootstrap-{ubuntu,mac}.sh download
-			// by default (MODEL=large-v3). Users who run MODELS=all can
+			// by default (MODEL=large-v3-turbo). Users who run MODELS=all can
 			// switch via the tray menu, which writes a non-empty Model
 			// short-name back to config.
 			Model:         "",
@@ -95,8 +103,9 @@ func defaults() Config {
 			BeamSize:            defaultBeamSize(),            // platform-tuned: Linux 5, macOS 1
 			BeamAdaptive:        false,                        // opt-in; set true to get short=1 / long=5 dynamic switching
 			PadSilence:          false,                        // opt-in; wrap every clip in 1 s silence padding
-			MultiInferenceCount: defaultMultiInferenceCount(), // platform-tuned: Linux 4, macOS 1
+			MultiInferenceCount: defaultMultiInferenceCount(), // platform-tuned: Linux 4, macOS 2
 			ScoringMode:         "combined",                   // confidence + heuristic blend; switchable from the tray
+			MultiInference:      true,                         // live on/off for the variant batch; toggled from the menu
 			InitialPrompt:       "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
 		},
 		// PasteDelayMs sits between Set-clipboard / Cmd-V and the Restore-clipboard
@@ -125,7 +134,7 @@ func Load(path string) (Config, error) {
 	// Resolve the model file path. Precedence:
 	//   1. Whisper.Model (short name)  → <ModelsDir>/ggml-<Model>.bin
 	//   2. Whisper.ModelPath           → used as-is (after ~-expansion)
-	//   3. neither set                 → <ModelsDir>/ggml-large-v3.bin (legacy default)
+	//   3. neither set                 → <ModelsDir>/ggml-large-v3-turbo.bin (default)
 	if cfg.Whisper.Model != "" {
 		dir, err := paths.ModelsDir()
 		if err != nil {
@@ -137,10 +146,10 @@ func Load(path string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("models dir: %w", err)
 		}
-		// Legacy default. Set Model too so the tray/dock model-picker
+		// Default model. Set Model too so the tray/dock model-picker
 		// shows the correct checkmark on a fresh install instead of "no
 		// active model" (-1).
-		cfg.Whisper.Model = "large-v3"
+		cfg.Whisper.Model = "large-v3-turbo"
 		cfg.Whisper.ModelPath = filepath.Join(dir, "ggml-"+cfg.Whisper.Model+".bin")
 	}
 

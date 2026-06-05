@@ -51,6 +51,12 @@ $(BIN): $(WHISPER_BUILD)/src/libwhisper.a $(ALL_SOURCES)
 	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" \
 	CGO_LDFLAGS="$(CGO_LDFLAGS_DARWIN)" \
 	go build -trimpath -buildvcs=false -a -o $(BIN) ./cmd/murrly
+	# The multi-inference picker (Ctrl+F11) is a standalone Fyne GUI in its
+	# own binary — systray and a Fyne window can't share the main OS thread.
+	# Pure Go + Cocoa/OpenGL, no whisper/Metal linkage, so it needs none of
+	# the cgo env above. install-mac.sh copies it into the bundle as
+	# murrly-picker, next to murrly, where the spawn driver looks for it.
+	go build -trimpath -buildvcs=false -o bin/picker ./cmd/picker
 
 install: build
 	scripts/install-mac.sh

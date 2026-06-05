@@ -1,11 +1,13 @@
-//go:build linux
+//go:build linux || darwin
 
 // Package picker shows a single-select chooser so the user can pick among
-// multi-inference variants. On Linux it spawns the standalone Fyne binary
-// (murrly-picker): options go in on stdin (NUL-separated, since a variant
-// may span several lines), the chosen 0-based index comes back on stdout.
-// The binary handles its own placement (taskbar-skip + centring on the
-// monitor under the mouse), so this driver is just spawn + read.
+// multi-inference variants. On Linux and macOS it spawns the standalone
+// Fyne binary (murrly-picker): options go in on stdin (NUL-separated,
+// since a variant may span several lines), the chosen 0-based index comes
+// back on stdout. The spawn + read logic here is platform-neutral; the
+// binary handles its own placement (X11 taskbar-skip + centring on Linux,
+// Fyne's default centred frontmost window on macOS), so this driver is
+// just spawn + read on both.
 package picker
 
 import (

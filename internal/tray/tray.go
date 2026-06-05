@@ -20,20 +20,22 @@ const (
 )
 
 type Tray struct {
-	icons         map[State][]byte
-	stateCh       chan State
-	transcriptCh  chan []string
-	activeModelCh chan int
-	actions       *menuactions.Actions
+	icons           map[State][]byte
+	stateCh         chan State
+	transcriptCh    chan []string
+	activeModelCh   chan int
+	activeScoringCh chan int
+	actions         *menuactions.Actions
 }
 
 func New(icons map[State][]byte, actions *menuactions.Actions) *Tray {
 	return &Tray{
-		icons:         icons,
-		stateCh:       make(chan State, 8),
-		transcriptCh:  make(chan []string, 8),
-		activeModelCh: make(chan int, 8),
-		actions:       actions,
+		icons:           icons,
+		stateCh:         make(chan State, 8),
+		transcriptCh:    make(chan []string, 8),
+		activeModelCh:   make(chan int, 8),
+		activeScoringCh: make(chan int, 8),
+		actions:         actions,
 	}
 }
 
@@ -69,6 +71,17 @@ func (t *Tray) SetRecentTranscripts(items []string) {
 func (t *Tray) SetActiveModel(index int) {
 	select {
 	case t.activeModelCh <- index:
+	default:
+	}
+}
+
+// SetActiveScoring moves the checkmark in the scoring-mode group to the
+// item at the given index, clearing the others. Pass -1 to clear all.
+// Driven from the scoring-pick callback so a pick from either the tray or
+// the Dock menu keeps both in sync.
+func (t *Tray) SetActiveScoring(index int) {
+	select {
+	case t.activeScoringCh <- index:
 	default:
 	}
 }
@@ -112,6 +125,17 @@ func (t *Tray) onReady() {
 			checked := i == t.actions.ActiveModelIndex
 			modelItems[i] = systray.AddMenuItemCheckbox("Модель: "+lbl, "Переключить модель Whisper", checked)
 		}
+	}
+
+	// Multi-inference on/off (only when the engine is built). Off → F12 is
+	// a single pass on the original sample, no variant batch and no
+	// Ctrl+F11 picker; Ctrl+F12 reprocess behaves like the old single-pass
+	// retry. Placed above the scoring group it gates.
+	var multiItem *systray.MenuItem
+	if t.actions.OnToggleMulti != nil {
+		systray.AddSeparator()
+		multiChecked := t.actions.IsMultiOn != nil && t.actions.IsMultiOn()
+		multiItem = systray.AddMenuItemCheckbox("Множественное распознавание", "Распознавать несколько вариантов и выбирать лучший (Ctrl+F11 — выбрать вручную)", multiChecked)
 	}
 
 	// Scoring-mode picker (multi-inference only). Flat checkable items
@@ -167,9 +191,27 @@ func (t *Tray) onReady() {
 			}
 		}()
 	}
+	// Multi-inference toggle — flips the live state and re-ticks itself
+	// from the returned value. Conditional item, so it runs in its own
+	// goroutine rather than the main select.
+	if multiItem != nil {
+		mi := multiItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnToggleMulti != nil {
+					if t.actions.OnToggleMulti() {
+						mi.Check()
+					} else {
+						mi.Uncheck()
+					}
+				}
+			}
+		}()
+	}
+
 	// Scoring-mode items behave as a radio group: clicking one fires the
-	// callback and moves the checkmark to it (clearing the others). Each
-	// item closes over the full slice so it can re-tick the group.
+	// callback, which re-ticks the group through activeScoringCh (so a pick
+	// from the Dock menu moves this group's checkmark too, and vice versa).
 	for i, item := range scoringItems {
 		idx := i
 		mi := item
@@ -177,13 +219,6 @@ func (t *Tray) onReady() {
 			for range mi.ClickedCh {
 				if t.actions.OnPickScoringMode != nil {
 					t.actions.OnPickScoringMode(idx)
-				}
-				for j, it := range scoringItems {
-					if j == idx {
-						it.Check()
-					} else {
-						it.Uncheck()
-					}
 				}
 			}
 		}()
@@ -221,6 +256,14 @@ func (t *Tray) onReady() {
 				updateTranscriptMenuItems(copyItems, items)
 			case idx := <-t.activeModelCh:
 				for i, item := range modelItems {
+					if i == idx {
+						item.Check()
+					} else {
+						item.Uncheck()
+					}
+				}
+			case idx := <-t.activeScoringCh:
+				for i, item := range scoringItems {
 					if i == idx {
 						item.Check()
 					} else {

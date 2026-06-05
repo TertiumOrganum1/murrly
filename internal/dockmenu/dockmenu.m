@@ -12,9 +12,13 @@ typedef void (*mur_void_cb)(void);
     NSMenu* dockMenu;
     NSMenuItem* copyItems[3];
     NSMenuItem* autostartItem;
+    NSMenuItem* multiItem;
     NSMutableArray<NSMenuItem*>* modelItems;
+    NSMutableArray<NSMenuItem*>* scoringItems;
     mur_int_cb cbCopy;
     mur_int_cb cbPickModel;
+    mur_int_cb cbPickScoring;
+    mur_void_cb cbToggleMulti;
     mur_void_cb cbToggleAutostart;
     mur_void_cb cbOpenConfig;
     mur_void_cb cbReloadConfig;
@@ -28,6 +32,8 @@ typedef void (*mur_void_cb)(void);
 - (void)didPickCopy1:(id)sender;
 - (void)didPickCopy2:(id)sender;
 - (void)didPickModel:(id)sender;
+- (void)didPickScoring:(id)sender;
+- (void)didPickMulti:(id)sender;
 - (void)didPickAutostart:(id)sender;
 - (void)didPickOpenConfig:(id)sender;
 - (void)didPickReloadConfig:(id)sender;
@@ -59,6 +65,11 @@ typedef void (*mur_void_cb)(void);
     NSMenuItem* item = (NSMenuItem*)sender;
     if (cbPickModel) cbPickModel((int)[item tag]);
 }
+- (void)didPickScoring:(id)sender {
+    NSMenuItem* item = (NSMenuItem*)sender;
+    if (cbPickScoring) cbPickScoring((int)[item tag]);
+}
+- (void)didPickMulti:(id)sender { if (cbToggleMulti) cbToggleMulti(); }
 - (void)didPickAutostart:(id)sender { if (cbToggleAutostart) cbToggleAutostart(); }
 - (void)didPickOpenConfig:(id)sender { if (cbOpenConfig) cbOpenConfig(); }
 - (void)didPickReloadConfig:(id)sender { if (cbReloadConfig) cbReloadConfig(); }
@@ -84,6 +95,8 @@ static NSString* emptySlotTitle(int idx) {
 void mur_dockmenu_install(
     void (*onCopyTranscript)(int index),
     void (*onPickModel)(int index),
+    void (*onPickScoring)(int index),
+    void (*onToggleMulti)(void),
     void (*onToggleAutostart)(void),
     void (*onOpenConfig)(void),
     void (*onReloadConfig)(void),
@@ -92,7 +105,10 @@ void mur_dockmenu_install(
     void (*onReprocess)(void),
     void (*onQuit)(void),
     const char* const* modelLabels,
-    int modelCount
+    int modelCount,
+    const char* const* scoringLabels,
+    int scoringCount,
+    int multiEnabled
 ) {
     // Capture into Cocoa types up front; the block below runs async on
     // the main thread and a C array pointer may not be safe to keep.
@@ -101,12 +117,19 @@ void mur_dockmenu_install(
         const char* s = modelLabels[i];
         [labels addObject:s ? [NSString stringWithUTF8String:s] : @""];
     }
+    NSMutableArray<NSString*>* scoreLabels = [NSMutableArray arrayWithCapacity:scoringCount];
+    for (int i = 0; i < scoringCount; i++) {
+        const char* s = scoringLabels[i];
+        [scoreLabels addObject:s ? [NSString stringWithUTF8String:s] : @""];
+    }
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gMurDelegate) return;
 
         gMurDelegate = [[MurrlyDockMenuDelegate alloc] init];
         gMurDelegate->cbCopy = onCopyTranscript;
         gMurDelegate->cbPickModel = onPickModel;
+        gMurDelegate->cbPickScoring = onPickScoring;
+        gMurDelegate->cbToggleMulti = onToggleMulti;
         gMurDelegate->cbToggleAutostart = onToggleAutostart;
         gMurDelegate->cbOpenConfig = onOpenConfig;
         gMurDelegate->cbReloadConfig = onReloadConfig;
@@ -116,6 +139,7 @@ void mur_dockmenu_install(
         gMurDelegate->cbQuit = onQuit;
         gMurDelegate->originalDelegate = [NSApp delegate];
         gMurDelegate->modelItems = [NSMutableArray array];
+        gMurDelegate->scoringItems = [NSMutableArray array];
 
         NSMenu* menu = [[NSMenu alloc] init];
         [menu setAutoenablesItems:NO];
@@ -158,6 +182,46 @@ void mur_dockmenu_install(
         }
         [modelHeader setSubmenu:modelSubmenu];
         [menu addItem:modelHeader];
+
+        // Multi-inference on/off. Shown only when the engine exists (same
+        // condition as the scoring group). Off → F12 is a single pass on
+        // the original sample, no variant batch, no Ctrl+F11 picker.
+        if ([scoreLabels count] >= 2) {
+            NSMenuItem* multi = [[NSMenuItem alloc]
+                initWithTitle:@"Множественное распознавание"
+                action:@selector(didPickMulti:)
+                keyEquivalent:@""];
+            [multi setTarget:gMurDelegate];
+            [multi setState:multiEnabled ? NSControlStateValueOn : NSControlStateValueOff];
+            [menu addItem:multi];
+            gMurDelegate->multiItem = multi;
+        }
+
+        // Scoring submenu — how the best multi-inference variant is chosen
+        // ("вместе" / "только Whisper" / "только эвристика"). Shown only
+        // when there are at least two modes to choose between (i.e. multi-
+        // inference is active); single-pass passes an empty list.
+        if ([scoreLabels count] >= 2) {
+            NSMenuItem* scoringHeader = [[NSMenuItem alloc]
+                initWithTitle:@"Оценка варианта"
+                action:NULL
+                keyEquivalent:@""];
+            NSMenu* scoringSubmenu = [[NSMenu alloc] init];
+            [scoringSubmenu setAutoenablesItems:NO];
+            for (int i = 0; i < (int)[scoreLabels count]; i++) {
+                NSMenuItem* scoringItem = [[NSMenuItem alloc]
+                    initWithTitle:scoreLabels[i]
+                    action:@selector(didPickScoring:)
+                    keyEquivalent:@""];
+                [scoringItem setTarget:gMurDelegate];
+                [scoringItem setTag:i];
+                [scoringItem setState:NSControlStateValueOff];
+                [scoringSubmenu addItem:scoringItem];
+                [gMurDelegate->scoringItems addObject:scoringItem];
+            }
+            [scoringHeader setSubmenu:scoringSubmenu];
+            [menu addItem:scoringHeader];
+        }
 
         NSMenuItem* autoItem = [[NSMenuItem alloc]
             initWithTitle:@"Запускать при логине"
@@ -246,10 +310,28 @@ void mur_dockmenu_set_model_index(int index) {
     });
 }
 
+void mur_dockmenu_set_scoring_index(int index) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gMurDelegate) return;
+        for (int i = 0; i < (int)[gMurDelegate->scoringItems count]; i++) {
+            NSMenuItem* it = gMurDelegate->scoringItems[i];
+            [it setState:(i == index) ? NSControlStateValueOn : NSControlStateValueOff];
+        }
+    });
+}
+
 void mur_dockmenu_set_autostart(int enabled) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!gMurDelegate || !gMurDelegate->autostartItem) return;
         [gMurDelegate->autostartItem setState:
+            enabled ? NSControlStateValueOn : NSControlStateValueOff];
+    });
+}
+
+void mur_dockmenu_set_multi(int enabled) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gMurDelegate || !gMurDelegate->multiItem) return;
+        [gMurDelegate->multiItem setState:
             enabled ? NSControlStateValueOn : NSControlStateValueOff];
     });
 }

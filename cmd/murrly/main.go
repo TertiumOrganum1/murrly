@@ -286,7 +286,31 @@ func main() {
 				log.Printf("scoring mode persist: %v", err)
 			}
 			cfg.Whisper.ScoringMode = mode.String()
+			// Keep both menus' checkmarks in sync regardless of which one
+			// the pick came from (tray vs Dock).
+			dockmenu.SetActiveScoring(index)
+			t.SetActiveScoring(index)
 			log.Printf("scoring mode -> %s (applies to next recording / Ctrl+F12 batch)", mode)
+		}
+
+		// Live multi-inference on/off. When off, F12 does a single pass on
+		// the original sample (no variant batch, no Ctrl+F11 picker) and
+		// Ctrl+F12 reprocess behaves like the old single-pass retry.
+		actions.IsMultiOn = func() bool {
+			if a == nil {
+				return cfg.Whisper.MultiInference
+			}
+			return a.MultiInferenceOn()
+		}
+		actions.OnToggleMulti = func() bool {
+			newState := !a.MultiInferenceOn()
+			a.SetMultiInference(newState)
+			if err := persistMultiInference(cfgPath, cfg, newState); err != nil {
+				log.Printf("multi-inference persist: %v", err)
+			}
+			cfg.Whisper.MultiInference = newState
+			dockmenu.SetMulti(newState)
+			return newState
 		}
 	}
 	t = tray.New(icons, actions)
@@ -326,10 +350,16 @@ func main() {
 		},
 	}
 	// Multi-inference takes over the transcribe path when a runner was
-	// built (count > 1). The picker backs Alt+F12 selection.
+	// built (count > 1) AND the live toggle is on. The same adapter also
+	// serves the single-pass path (Transcriber → Runner.RunOne), so turning
+	// multi-inference off costs nothing — no second model is loaded. The
+	// picker backs Ctrl+F11 selection.
 	if multiRunner != nil {
-		appCfg.MultiTranscriber = &multiAdapter{r: multiRunner}
+		ma := &multiAdapter{r: multiRunner}
+		appCfg.MultiTranscriber = ma
+		appCfg.Transcriber = ma // single-pass path when the toggle is off
 		appCfg.Picker = pickerAdapter{}
+		appCfg.MultiInference = cfg.Whisper.MultiInference
 	}
 	a = app.New(appCfg)
 
@@ -408,6 +438,10 @@ func main() {
 	// Reflect current state in the menus on startup.
 	dockmenu.SetAutostart(autostart.Enabled())
 	dockmenu.SetActiveModel(indexOf(presentModelNames, cfg.Whisper.Model))
+	if multiRunner != nil {
+		dockmenu.SetActiveScoring(scoringIndexOf(scoreMode))
+		dockmenu.SetMulti(cfg.Whisper.MultiInference)
+	}
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -553,6 +587,13 @@ func (a clipAdapter) Restore(saved any) error {
 type multiAdapter struct{ r *multiinfer.Runner }
 
 func (m *multiAdapter) Count() int { return m.r.Count() }
+
+// Transcribe is the single-pass path (app.Transcriber): one inference over
+// the audio as-is, used when the multi-inference toggle is off. Backed by
+// the same model/session as the variant batch.
+func (m *multiAdapter) Transcribe(pcm []float32) (string, error) {
+	return m.r.RunOne(pcm)
+}
 
 func (m *multiAdapter) Run(pcm []float32, leadOffsetSec float64) []app.Variant {
 	cands := m.r.Run(pcm, leadOffsetSec)

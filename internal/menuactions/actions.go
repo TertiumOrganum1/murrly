@@ -56,6 +56,14 @@ type Actions struct {
 	OnTogglePadSilence func() bool
 	IsPadSilenceOn     func() bool
 
+	// Multi-inference toggle ("Множественное распознавание"). Same shape
+	// as autostart: OnToggleMulti flips the live state and returns the new
+	// value; IsMultiOn reports the initial value at render time. Left nil
+	// when no multi-inference engine is built (single-pass / count == 1),
+	// so the renderer omits the item.
+	OnToggleMulti func() bool
+	IsMultiOn     func() bool
+
 	// macOS Privacy panes (System Settings deep-links). Non-nil only
 	// on darwin; renderers must hide the Permissions submenu when both
 	// are nil (Linux has no TCC-style permission gate to surface).
