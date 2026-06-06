@@ -12,7 +12,9 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/app"
 	"github.com/tertiumorganum1/murrly/internal/config"
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
+	"github.com/tertiumorganum1/murrly/internal/menuactions"
 	"github.com/tertiumorganum1/murrly/internal/nemotron"
+	"github.com/tertiumorganum1/murrly/internal/nemotronservice"
 )
 
 // nemoVariants is the number of diversified variants the sidecar runs in
@@ -115,6 +117,28 @@ func setupNemotron(events chan app.Event, ncfg config.NemotronConfig) app.Nemotr
 	}
 
 	return &engineManager{nemo: client}
+}
+
+// wireNemotronStatus hooks the tray's Nemotron group up to the live engine:
+// the "Перезапустить Nemotron" action restarts the systemd sidecar, and
+// NemotronStatus pings the socket so the tray can show загружается/готов/не
+// запущен. No-op when the engine isn't an *engineManager (disabled).
+func wireNemotronStatus(actions *menuactions.Actions, eng app.NemotronEngine) {
+	mgr, ok := eng.(*engineManager)
+	if !ok || mgr == nil {
+		return
+	}
+	actions.OnRestartNemotron = func() {
+		if err := nemotronservice.Restart(); err != nil {
+			log.Printf("nemotron: restart failed: %v", err)
+		}
+	}
+	actions.NemotronStatus = func() string {
+		if mgr.nemo.Ping() == nil {
+			return "готов ✓"
+		}
+		return "не запущен"
+	}
 }
 
 // trySend posts an event without blocking — drops it if the buffer is full

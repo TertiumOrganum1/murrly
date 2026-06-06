@@ -3,6 +3,7 @@ package tray
 
 import (
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"fyne.io/systray"
@@ -25,6 +26,7 @@ type Tray struct {
 	transcriptCh    chan []string
 	activeModelCh   chan int
 	activeScoringCh chan int
+	nemoStatusCh    chan string
 	actions         *menuactions.Actions
 }
 
@@ -35,7 +37,17 @@ func New(icons map[State][]byte, actions *menuactions.Actions) *Tray {
 		transcriptCh:    make(chan []string, 8),
 		activeModelCh:   make(chan int, 8),
 		activeScoringCh: make(chan int, 8),
+		nemoStatusCh:    make(chan string, 8),
 		actions:         actions,
+	}
+}
+
+// SetNemotronStatus updates the disabled "Nemotron: …" status line. No-op
+// if the Nemotron menu group isn't shown (callback nil).
+func (t *Tray) SetNemotronStatus(s string) {
+	select {
+	case t.nemoStatusCh <- s:
+	default:
 	}
 }
 
@@ -157,6 +169,17 @@ func (t *Tray) onReady() {
 	padSilenceChecked := t.actions.IsPadSilenceOn != nil && t.actions.IsPadSilenceOn()
 	padSilenceItem := systray.AddMenuItemCheckbox("Тишина по краям", "Добавлять 1 с тишины с обеих сторон каждой записи перед Whisper", padSilenceChecked)
 
+	// Nemotron group (Linux only — shown when the restart callback is wired).
+	// A disabled status line shows the ~48 s model load; a restart item
+	// recovers a wedged sidecar.
+	var nemoStatusItem, nemoRestartItem *systray.MenuItem
+	if t.actions.OnRestartNemotron != nil {
+		systray.AddSeparator()
+		nemoStatusItem = systray.AddMenuItem("Nemotron: загружается…", "Состояние сайдкара Nemotron")
+		nemoStatusItem.Disable()
+		nemoRestartItem = systray.AddMenuItem("Перезапустить Nemotron", "Перезапустить сайдкар-сервис Nemotron")
+	}
+
 	reloadItem := systray.AddMenuItem("Перезагрузить конфиг", "Перечитать config.toml")
 	openCfgItem := systray.AddMenuItem("Открыть конфиг", "Открыть config.toml")
 
@@ -244,6 +267,28 @@ func (t *Tray) onReady() {
 		}()
 	}
 
+	// Nemotron restart click + status poller (conditional items run outside
+	// the main select, like the multi-inference toggle above).
+	if nemoRestartItem != nil {
+		mi := nemoRestartItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnRestartNemotron != nil {
+					t.actions.OnRestartNemotron()
+					t.SetNemotronStatus("перезапуск…")
+				}
+			}
+		}()
+	}
+	if nemoStatusItem != nil && t.actions.NemotronStatus != nil {
+		go func() {
+			for {
+				t.SetNemotronStatus(t.actions.NemotronStatus())
+				time.Sleep(3 * time.Second)
+			}
+		}()
+	}
+
 	go func() {
 		for {
 			select {
@@ -269,6 +314,10 @@ func (t *Tray) onReady() {
 					} else {
 						item.Uncheck()
 					}
+				}
+			case s := <-t.nemoStatusCh:
+				if nemoStatusItem != nil {
+					nemoStatusItem.SetTitle("Nemotron: " + s)
 				}
 			case <-reloadItem.ClickedCh:
 				if t.actions.OnReloadConfig != nil {

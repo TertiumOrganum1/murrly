@@ -371,6 +371,9 @@ func main() {
 	if multiRunner != nil || appCfg.Nemotron != nil {
 		appCfg.Picker = pickerAdapter{}
 	}
+	// Tray's Nemotron group (status line + restart). No-op off Linux or when
+	// the engine is disabled.
+	wireNemotronStatus(actions, appCfg.Nemotron)
 
 	a = app.New(appCfg)
 
