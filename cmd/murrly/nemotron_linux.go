@@ -53,12 +53,16 @@ func (m *engineManager) Dictate(pcm []float32, leadOffsetSec float64, multi bool
 			return
 		}
 		for _, c := range cands {
-			if strings.TrimSpace(c.Text) == "" {
+			formatted := nemotron.FormatNemotron(c.Text)
+			if strings.TrimSpace(formatted) == "" {
 				continue
 			}
 			nemoVars = append(nemoVars, app.Variant{
-				Text:       c.Text,
-				Model:      app.ModelNemotron,
+				Text:  formatted,
+				Model: app.ModelNemotron,
+				// Score the RAW text so punctuation/length heuristics
+				// discriminate the cleanest variant before formatting
+				// adds a uniform capital + period to every long one.
 				Score:      nemotron.HybridScore(c.Text, c.Score),
 				Confidence: c.Score,
 			})
