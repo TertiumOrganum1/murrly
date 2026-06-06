@@ -354,27 +354,21 @@ func main() {
 	// serves the single-pass path (Transcriber → Runner.RunOne), so turning
 	// multi-inference off costs nothing — no second model is loaded. The
 	// picker backs Ctrl+F11 selection.
-	var ma *multiAdapter
 	if multiRunner != nil {
-		ma = &multiAdapter{r: multiRunner}
+		ma := &multiAdapter{r: multiRunner}
 		appCfg.MultiTranscriber = ma
 		appCfg.Transcriber = ma // single-pass path when the toggle is off
 		appCfg.MultiInference = cfg.Whisper.MultiInference
 	}
 
-	// Cross-engine: Whisper + Nemotron. Linux-only — the stub returns nil
-	// elsewhere, leaving the legacy Whisper-only path. When wired it owns
-	// the recording path (F12 → best Whisper, Break → best Nemotron) and
-	// needs the picker for Ctrl+F11.
-	whisperSingle := appCfg.Transcriber
-	var whisperMulti app.MultiTranscriber
-	if ma != nil {
-		whisperMulti = ma
+	// Second engine: Nemotron on the Break key. Linux-only (the stub returns
+	// nil elsewhere). F12 stays on the fast Whisper path above; Break runs
+	// Nemotron, and F12 also fires Nemotron in the background to fill the
+	// Ctrl+F11 picker without delaying the Whisper insert.
+	if nemo := setupNemotron(events); nemo != nil {
+		appCfg.Nemotron = nemo
 	}
-	if cross := setupNemotron(events, whisperSingle, whisperMulti); cross != nil {
-		appCfg.CrossEngine = cross
-	}
-	if appCfg.CrossEngine != nil || multiRunner != nil {
+	if multiRunner != nil || appCfg.Nemotron != nil {
 		appCfg.Picker = pickerAdapter{}
 	}
 

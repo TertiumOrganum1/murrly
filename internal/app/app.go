@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -89,15 +90,14 @@ type MultiTranscriber interface {
 	Count() int
 }
 
-// CrossEngine runs every wired engine (Whisper + Nemotron) over one sample
-// and returns the combined variants, each tagged with Model and ranked
-// best-first WITHIN its model. multi=true asks each engine for its full
-// variant batch; false asks for a single pass per engine. leadOffsetSec
-// shifts the leading silence so reprocess rounds explore fresh chunk
-// alignments (Whisper); Nemotron may ignore it. Count returns the per-engine
-// batch size, used for the reprocess offset math.
-type CrossEngine interface {
-	Dictate(pcm []float32, leadOffsetSec float64, multi bool) []Variant
+// NemotronEngine produces Nemotron-only variants, ranked best-first. Driven
+// by the Break key. F12 stays on the Whisper Transcriber/MultiTranscriber
+// path so it keeps its original speed — we deliberately do NOT run both
+// engines on every dictation (Nemotron's per-call overhead made that ~10×
+// slower on short phrases). multi → full variant batch; false → single pass.
+// leadOffsetSec feeds reprocess-round diversification; Count is the batch size.
+type NemotronEngine interface {
+	Run(pcm []float32, leadOffsetSec float64, multi bool) []Variant
 	Count() int
 }
 
@@ -122,12 +122,10 @@ type Paster interface {
 type Config struct {
 	Recorder    Recorder
 	Transcriber Transcriber
-	// CrossEngine, when non-nil, takes over the recording path: it runs all
-	// wired engines (Whisper + Nemotron) and returns combined, model-tagged,
-	// per-model-ranked variants. F12 inserts the best Whisper variant, the
-	// Break key the best Nemotron one; Ctrl+F11 picks from all. nil → the
-	// legacy Whisper-only path (Transcriber / MultiTranscriber). Linux-only.
-	CrossEngine  CrossEngine
+	// Nemotron, when non-nil, is the second engine driven by the Break key.
+	// F12 keeps using Transcriber / MultiTranscriber (Whisper) at full speed;
+	// Break runs Nemotron only. nil → Break ignored (non-Linux / disabled).
+	Nemotron     NemotronEngine
 	Clipboard    Clipboard
 	Paster       Paster
 	OnState      func(State)
@@ -203,6 +201,77 @@ type App struct {
 	// picks which model's top variant lands in the window. Touched only on
 	// the App goroutine — no sync needed.
 	preferNemotron bool
+	// varMu guards lastVariants and varGen. lastVariants is appended both
+	// from the App goroutine (the engine whose result is inserted) AND from a
+	// background Nemotron goroutine on the F12 path, so it needs a lock.
+	// varGen bumps on every fresh recording; a background append checks it so
+	// a slow Nemotron run from a previous utterance can't leak into the next
+	// one's picker set.
+	varMu  sync.Mutex
+	varGen uint64
+}
+
+// resetVariants clears the picker cache and bumps the generation. Called when
+// finish() captures fresh audio, so any in-flight background append is dropped.
+func (a *App) resetVariants() {
+	a.varMu.Lock()
+	a.lastVariants = nil
+	a.varGen++
+	a.varMu.Unlock()
+}
+
+// appendVariants appends on the App goroutine and returns the pre-append count
+// (for log numbering).
+func (a *App) appendVariants(vs []Variant) int {
+	a.varMu.Lock()
+	base := len(a.lastVariants)
+	a.lastVariants = append(a.lastVariants, vs...)
+	a.varMu.Unlock()
+	return base
+}
+
+// appendVariantsGen appends from a background goroutine, but only if the
+// generation still matches (i.e. no newer recording has started).
+func (a *App) appendVariantsGen(gen uint64, vs []Variant) bool {
+	a.varMu.Lock()
+	defer a.varMu.Unlock()
+	if gen != a.varGen {
+		return false
+	}
+	a.lastVariants = append(a.lastVariants, vs...)
+	return true
+}
+
+func (a *App) curGen() uint64 {
+	a.varMu.Lock()
+	defer a.varMu.Unlock()
+	return a.varGen
+}
+
+// snapshotVariants returns a copy for the picker to render without holding
+// the lock during the (blocking) UI call.
+func (a *App) snapshotVariants() []Variant {
+	a.varMu.Lock()
+	defer a.varMu.Unlock()
+	return append([]Variant(nil), a.lastVariants...)
+}
+
+// kickNemotronBackground runs Nemotron off the critical path (F12 inserts
+// Whisper immediately) and folds its variants into the picker cache when
+// done. Nemotron is a separate process, so this goroutine shares no mutable
+// Go state with the engine — only lastVariants, which is mutex-guarded.
+func (a *App) kickNemotronBackground(pcm []float32, leadOffsetSec float64) {
+	gen := a.curGen()
+	multi := a.multiOn.Load()
+	go func() {
+		vs := a.cfg.Nemotron.Run(pcm, leadOffsetSec, multi)
+		if len(vs) == 0 {
+			return
+		}
+		if a.appendVariantsGen(gen, vs) {
+			log.Printf("nemotron (background): +%d variants in picker", len(vs))
+		}
+	}()
 }
 
 const (
@@ -293,7 +362,7 @@ func (a *App) handle(ev Event) {
 			}
 			a.setState(StateRecording)
 		case EventKeyDownNemotron:
-			if a.cfg.CrossEngine == nil {
+			if a.cfg.Nemotron == nil {
 				log.Printf("nemotron: engine not wired, Break ignored")
 				return
 			}
@@ -350,26 +419,29 @@ func (a *App) finish() {
 	a.lastPCM = pcm
 	a.reprocessAttempts = 0
 	a.multiRound = 0
-	a.lastVariants = nil
+	a.resetVariants()
 
-	// When the cross-engine is wired it owns the recording path: run both
-	// engines, cache every variant for the Ctrl+F11 picker, and insert the
-	// preferred model's best (F12 → Whisper, Break → Nemotron).
-	if a.cfg.CrossEngine != nil {
-		a.runCross(pcm, 0, pref, "recording")
+	// Break inserts a Nemotron result (and waits for it). F12 inserts the
+	// Whisper result immediately and lets Nemotron run in the BACKGROUND —
+	// its variants surface in the Ctrl+F11 picker when ready, never blocking
+	// the fast Whisper insert.
+	if pref && a.cfg.Nemotron != nil {
+		a.runNemotron(pcm, 0, "recording")
 		return
 	}
 
 	if a.multiActive() {
 		a.runMulti(pcm, 0, "recording")
-		return
+	} else {
+		toTranscribe := pcm
+		if a.padSilence.Load() {
+			toTranscribe = padPCM(pcm, baselineSilencePadStartSec, baselineSilencePadEndSec)
+		}
+		a.transcribeAndPaste(toTranscribe)
 	}
-
-	toTranscribe := pcm
-	if a.padSilence.Load() {
-		toTranscribe = padPCM(pcm, baselineSilencePadStartSec, baselineSilencePadEndSec)
+	if a.cfg.Nemotron != nil {
+		a.kickNemotronBackground(pcm, 0)
 	}
-	a.transcribeAndPaste(toTranscribe)
 }
 
 // reprocess re-runs the last captured PCM with a silence prefix
@@ -389,10 +461,10 @@ func (a *App) reprocess() {
 		return
 	}
 
-	if a.cfg.CrossEngine != nil {
+	if pref && a.cfg.Nemotron != nil {
 		a.multiRound++
-		offset := float64(a.multiRound*a.cfg.CrossEngine.Count()) * multiReprocessStepSec
-		a.runCross(a.lastPCM, offset, pref, fmt.Sprintf("reprocess #%d", a.multiRound))
+		offset := float64(a.multiRound*a.cfg.Nemotron.Count()) * multiReprocessStepSec
+		a.runNemotron(a.lastPCM, offset, fmt.Sprintf("reprocess #%d", a.multiRound))
 		return
 	}
 
@@ -483,12 +555,11 @@ func (a *App) runMulti(pcm []float32, leadOffsetSec float64, label string) {
 		return
 	}
 
-	base := len(a.lastVariants) // continuing variant numbering across batches
+	base := a.appendVariants(results) // continuing variant numbering across batches
 	log.Printf("%s: %.2fs (%d variants, took=%v)", label, audioSec, len(results), took.Round(time.Millisecond))
 	for i, v := range results {
 		log.Printf("  variant %d (pad=%.2fs conf=%.2f score=%.2f): %q", base+i+1, v.PadLeadSec, v.Confidence, v.Score, v.Text)
 	}
-	a.lastVariants = append(a.lastVariants, results...)
 
 	best := results[0]
 	log.Printf("  -> selected variant %d (best score %.2f), inserted", base+1, best.Score)
@@ -500,48 +571,30 @@ func (a *App) runMulti(pcm []float32, leadOffsetSec float64, label string) {
 	a.setState(StateIdle)
 }
 
-// runCross drives the cross-engine path: run every wired engine over the
-// PCM (1 variant each when multi is off, the full batch each when on),
-// cache all variants for the Ctrl+F11 picker, and insert the best variant
-// of the preferred model (preferNemo ? Nemotron : Whisper). leadOffsetSec
-// feeds the engines' reprocess alignment; label is "recording" or
-// "reprocess #N".
-func (a *App) runCross(pcm []float32, leadOffsetSec float64, preferNemo bool, label string) {
+// runNemotron drives the Break path: Nemotron-only variants (full batch when
+// multi is on, else a single pass), ranked best-first by the engine. Caches
+// them for the Ctrl+F11 picker and inserts the best. leadOffsetSec feeds the
+// reprocess-round diversification; label is "recording" or "reprocess #N".
+func (a *App) runNemotron(pcm []float32, leadOffsetSec float64, label string) {
 	a.setState(StateTranscribing)
 	audioSec := float64(len(pcm)) / float64(pcmSampleRateHz)
 	t0 := time.Now()
-	results := a.cfg.CrossEngine.Dictate(pcm, leadOffsetSec, a.multiOn.Load())
+	results := a.cfg.Nemotron.Run(pcm, leadOffsetSec, a.multiOn.Load())
 	took := time.Since(t0)
 
 	if len(results) == 0 {
-		log.Printf("%s: %.2fs — all variants empty/failed", label, audioSec)
+		log.Printf("%s [nemotron]: %.2fs — no variants (sidecar down?)", label, audioSec)
 		a.setState(StateError)
 		return
 	}
 
-	base := len(a.lastVariants)
-	log.Printf("%s: %.2fs (%d variants, took=%v)", label, audioSec, len(results), took.Round(time.Millisecond))
+	base := a.appendVariants(results)
+	log.Printf("%s [nemotron]: %.2fs (%d variants, took=%v)", label, audioSec, len(results), took.Round(time.Millisecond))
 	for i, v := range results {
-		log.Printf("  variant %d [%s] (conf=%.2f score=%.2f): %q", base+i+1, v.Model, v.Confidence, v.Score, v.Text)
+		log.Printf("  variant %d (score=%.2f): %q", base+i+1, v.Score, v.Text)
 	}
-	a.lastVariants = append(a.lastVariants, results...)
 
-	want := ModelWhisper
-	if preferNemo {
-		want = ModelNemotron
-	}
-	best := bestOfModel(results, want)
-	if best < 0 {
-		// Preferred model produced nothing (e.g. its sidecar is down) —
-		// fall back to the overall best so the user still gets text.
-		best = bestOfModel(results, "")
-	}
-	if best < 0 {
-		a.setState(StateIdle)
-		return
-	}
-	log.Printf("  -> inserted [%s] variant (score %.2f)", results[best].Model, results[best].Score)
-	if err := a.insertText(results[best].Text); err != nil {
+	if err := a.insertText(results[0].Text); err != nil {
 		log.Printf("insert: %v", err)
 		a.setState(StateError)
 		return
@@ -549,33 +602,24 @@ func (a *App) runCross(pcm []float32, leadOffsetSec float64, preferNemo bool, la
 	a.setState(StateIdle)
 }
 
-// bestOfModel returns the index of the highest-scoring variant whose Model
-// matches want (want == "" matches any model). -1 when none match.
-func bestOfModel(vs []Variant, want string) int {
-	best := -1
-	for i := range vs {
-		if want != "" && vs[i].Model != want {
-			continue
-		}
-		if best < 0 || vs[i].Score > vs[best].Score {
-			best = i
-		}
-	}
-	return best
-}
-
 // pickCandidate (Alt+F12) opens the picker over the cached variants and
 // inserts the chosen one. No new inference.
 func (a *App) pickCandidate() {
-	if a.cfg.Picker == nil || len(a.lastVariants) == 0 {
+	if a.cfg.Picker == nil {
 		return
 	}
-	idx, ok := a.cfg.Picker.Pick(a.lastVariants)
-	if !ok || idx < 0 || idx >= len(a.lastVariants) {
+	// Snapshot under the lock — the background Nemotron goroutine may be
+	// appending concurrently.
+	vars := a.snapshotVariants()
+	if len(vars) == 0 {
 		return
 	}
-	log.Printf("picker: user chose variant %d (score %.2f)", idx+1, a.lastVariants[idx].Score)
-	if err := a.insertText(a.lastVariants[idx].Text); err != nil {
+	idx, ok := a.cfg.Picker.Pick(vars)
+	if !ok || idx < 0 || idx >= len(vars) {
+		return
+	}
+	log.Printf("picker: user chose variant %d (score %.2f)", idx+1, vars[idx].Score)
+	if err := a.insertText(vars[idx].Text); err != nil {
 		log.Printf("insert: %v", err)
 	}
 }
