@@ -1,0 +1,19 @@
+# Murrly Nemotron ASR sidecar — systemd user service template.
+# Install: copy to ~/.config/systemd/user/, then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now murrly-nemotron.service
+# Adjust paths below to where the sidecar venv + sidecar.py live.
+[Unit]
+Description=Murrly Nemotron ASR sidecar
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=/media/tertium/m2_2t/linux/nemotron-test
+ExecStart=/media/tertium/m2_2t/linux/nemotron-test/.venv/bin/python /media/tertium/m2_2t/linux/nemotron-test/sidecar.py
+Environment=HF_HOME=/media/tertium/m2_2t/nemotron-test/hf-cache
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
