@@ -354,18 +354,29 @@ func main() {
 	// serves the single-pass path (Transcriber → Runner.RunOne), so turning
 	// multi-inference off costs nothing — no second model is loaded. The
 	// picker backs Ctrl+F11 selection.
+	var ma *multiAdapter
 	if multiRunner != nil {
-		ma := &multiAdapter{r: multiRunner}
+		ma = &multiAdapter{r: multiRunner}
 		appCfg.MultiTranscriber = ma
 		appCfg.Transcriber = ma // single-pass path when the toggle is off
-		appCfg.Picker = pickerAdapter{}
 		appCfg.MultiInference = cfg.Whisper.MultiInference
 	}
 
-	// Second engine: Nemotron via the Break key. Linux-only — a no-op stub
-	// returns nil elsewhere. nil means the engine isn't wired (Break is
-	// then ignored by the app).
-	appCfg.NemotronTranscriber = setupNemotron(events)
+	// Cross-engine: Whisper + Nemotron. Linux-only — the stub returns nil
+	// elsewhere, leaving the legacy Whisper-only path. When wired it owns
+	// the recording path (F12 → best Whisper, Break → best Nemotron) and
+	// needs the picker for Ctrl+F11.
+	whisperSingle := appCfg.Transcriber
+	var whisperMulti app.MultiTranscriber
+	if ma != nil {
+		whisperMulti = ma
+	}
+	if cross := setupNemotron(events, whisperSingle, whisperMulti); cross != nil {
+		appCfg.CrossEngine = cross
+	}
+	if appCfg.CrossEngine != nil || multiRunner != nil {
+		appCfg.Picker = pickerAdapter{}
+	}
 
 	a = app.New(appCfg)
 
@@ -415,7 +426,7 @@ func main() {
 	// grabbed by the desktop environment. Wired only when
 	// multi-inference is active — without a runner there's nothing to
 	// pick. Non-fatal registration like the others.
-	if multiRunner != nil {
+	if appCfg.Picker != nil {
 		if pickHk, err := hotkey.NewWithCtrl("F11"); err != nil {
 			log.Printf("picker hotkey: %v", err)
 		} else {
@@ -622,16 +633,42 @@ func (m *multiAdapter) Run(pcm []float32, leadOffsetSec float64) []app.Variant {
 type pickerAdapter struct{}
 
 func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
-	best := bestVariant(variants)
-	opts := make([]string, len(variants))
-	for i, v := range variants {
-		p := variantPreview(v.Text)
+	// Cap the window at the 8 most-recent variants: with two engines and
+	// reprocess rounds the cache can grow past what fits on screen and stays
+	// scannable. The returned index is mapped back to the full slice.
+	start := 0
+	if len(variants) > 8 {
+		start = len(variants) - 8
+	}
+	shown := variants[start:]
+	best := bestVariant(shown)
+	opts := make([]string, len(shown))
+	for i, v := range shown {
+		p := modelGlyph(v.Model) + variantPreview(v.Text)
 		if i == best {
 			p = "★ " + p
 		}
 		opts[i] = p
 	}
-	return picker.Pick("", opts)
+	idx, ok := picker.Pick("", opts)
+	if !ok {
+		return 0, false
+	}
+	return start + idx, true
+}
+
+// modelGlyph prefixes a per-engine marker so the picker shows which model
+// produced each variant. A glyph (not colour — colour marks hover/selection)
+// per the cross-engine design.
+func modelGlyph(model string) string {
+	switch model {
+	case app.ModelWhisper:
+		return "Ⓦ "
+	case app.ModelNemotron:
+		return "Ⓝ "
+	default:
+		return ""
+	}
 }
 
 // bestVariant returns the index of the highest-scoring variant (the one
