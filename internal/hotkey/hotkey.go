@@ -68,6 +68,9 @@ var x11Keysyms = map[string]C.KeySym{
 	"f13": 0xFFCA,
 	"f14": 0xFFCB,
 	"f15": 0xFFCC,
+	// Pause/Break — отдельная клавиша для движка Nemotron (Linux-only).
+	"pause": 0xFF13, // XK_Pause
+	"break": 0xFF6B, // XK_Break
 }
 
 type Listener struct {

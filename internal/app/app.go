@@ -38,6 +38,12 @@ const (
 	// user-chosen variant replaces the inserted text. No-op when there
 	// are no cached variants or no picker is wired (non-Linux).
 	EventPickCandidate
+	// EventKeyDownNemotron / EventKeyUpNemotron mirror EventKeyDown/Up but
+	// route the recording through the Nemotron engine (the Break key,
+	// Linux-only). Whisper stays on EventKeyDown/Up (F12). No-op when no
+	// NemotronTranscriber is wired.
+	EventKeyDownNemotron
+	EventKeyUpNemotron
 )
 
 type Recorder interface {
@@ -89,12 +95,17 @@ type Paster interface {
 }
 
 type Config struct {
-	Recorder     Recorder
-	Transcriber  Transcriber
-	Clipboard    Clipboard
-	Paster       Paster
-	OnState      func(State)
-	OnTranscript func(string)
+	Recorder    Recorder
+	Transcriber Transcriber
+	// NemotronTranscriber is the optional second engine, selected by the
+	// Break key (EventKeyDownNemotron). nil → Break is a no-op (engine not
+	// wired — e.g. non-Linux or the sidecar is disabled). Whisper always
+	// uses Transcriber.
+	NemotronTranscriber Transcriber
+	Clipboard           Clipboard
+	Paster              Paster
+	OnState             func(State)
+	OnTranscript        func(string)
 	// AdjustText is an optional last-mile hook applied after the
 	// transcriber finishes filtering and before the text reaches the
 	// clipboard. It exists for context-aware adjustments — e.g. read
@@ -159,6 +170,11 @@ type App struct {
 	// written from the menu toggle via SetMultiInference — atomic, like
 	// padSilence, to avoid mutex scaffolding for a single boolean.
 	multiOn atomic.Bool
+	// useNemotron is set when the current recording was started via the
+	// Break key (EventKeyDownNemotron), so finish() routes it through
+	// NemotronTranscriber instead of Whisper. Captured-and-reset at the
+	// top of finish(). Touched only on the App goroutine — no sync needed.
+	useNemotron bool
 }
 
 const (
@@ -247,13 +263,25 @@ func (a *App) handle(ev Event) {
 				return
 			}
 			a.setState(StateRecording)
+		case EventKeyDownNemotron:
+			if a.cfg.NemotronTranscriber == nil {
+				log.Printf("nemotron: engine not wired, Break ignored")
+				return
+			}
+			if err := a.cfg.Recorder.Start(); err != nil {
+				log.Printf("recorder.Start: %v", err)
+				a.setState(StateError)
+				return
+			}
+			a.useNemotron = true
+			a.setState(StateRecording)
 		case EventReprocess:
 			a.reprocess()
 		case EventPickCandidate:
 			a.pickCandidate()
 		}
 	case StateRecording:
-		if ev == EventKeyUp {
+		if ev == EventKeyUp || ev == EventKeyUpNemotron {
 			a.finish()
 		}
 		// EventReprocess while recording is intentionally ignored
@@ -265,6 +293,11 @@ func (a *App) handle(ev Event) {
 }
 
 func (a *App) finish() {
+	// Capture & clear the engine selection up front so it can't leak into
+	// the next recording even if we early-return below (e.g. empty PCM).
+	useNemo := a.useNemotron
+	a.useNemotron = false
+
 	pcm, err := a.cfg.Recorder.Stop()
 	if err != nil {
 		log.Printf("recorder.Stop: %v", err)
@@ -285,6 +318,13 @@ func (a *App) finish() {
 	a.reprocessAttempts = 0
 	a.multiRound = 0
 	a.lastVariants = nil
+
+	// Break-key recording routes straight to the Nemotron engine. Single
+	// pass for now — cross-model multi-inference is a later phase.
+	if useNemo {
+		a.transcribeAndPasteWith(a.cfg.NemotronTranscriber, pcm)
+		return
+	}
 
 	if a.multiActive() {
 		a.runMulti(pcm, 0, "recording")
@@ -354,10 +394,17 @@ func padPCM(pcm []float32, startSec, endSec float64) []float32 {
 // the F12 path does — reprocess shouldn't overwrite the saved
 // original with a padded version).
 func (a *App) transcribeAndPaste(pcm []float32) {
+	a.transcribeAndPasteWith(a.cfg.Transcriber, pcm)
+}
+
+// transcribeAndPasteWith runs the given transcriber over the PCM and
+// inserts the result. transcribeAndPaste uses the default (Whisper)
+// engine; the Break path passes NemotronTranscriber.
+func (a *App) transcribeAndPasteWith(tr Transcriber, pcm []float32) {
 	a.setState(StateTranscribing)
 	audioSec := float64(len(pcm)) / float64(pcmSampleRateHz)
 	t0 := time.Now()
-	text, err := a.cfg.Transcriber.Transcribe(pcm)
+	text, err := tr.Transcribe(pcm)
 	transcribeMs := time.Since(t0).Milliseconds()
 	if err != nil {
 		log.Printf("transcribe: %v", err)

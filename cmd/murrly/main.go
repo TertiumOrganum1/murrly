@@ -25,8 +25,8 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/multiinfer"
 	"github.com/tertiumorganum1/murrly/internal/overlay"
 	"github.com/tertiumorganum1/murrly/internal/paster"
-	"github.com/tertiumorganum1/murrly/internal/picker"
 	"github.com/tertiumorganum1/murrly/internal/paths"
+	"github.com/tertiumorganum1/murrly/internal/picker"
 	"github.com/tertiumorganum1/murrly/internal/recorder"
 	"github.com/tertiumorganum1/murrly/internal/transcriber"
 	"github.com/tertiumorganum1/murrly/internal/transcripthistory"
@@ -361,6 +361,12 @@ func main() {
 		appCfg.Picker = pickerAdapter{}
 		appCfg.MultiInference = cfg.Whisper.MultiInference
 	}
+
+	// Second engine: Nemotron via the Break key. Linux-only — a no-op stub
+	// returns nil elsewhere. nil means the engine isn't wired (Break is
+	// then ignored by the app).
+	appCfg.NemotronTranscriber = setupNemotron(events)
+
 	a = app.New(appCfg)
 
 	hk, err := hotkey.New(cfg.Hotkey.Key)
