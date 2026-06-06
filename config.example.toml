@@ -19,6 +19,18 @@ PostgreSQL, gRPC, REST, Redis, Kafka, CI/CD, monorepo,
 frontend, backend, service mesh.
 """
 
+# Nemotron — второй движок на клавише Break/Pause (только Linux).
+# Модель крутится в отдельном Python-сайдкаре (systemd user-сервис
+# murrly-nemotron.service), Murrly общается с ним по Unix-сокету.
+# F12 остаётся на Whisper и вставляет мгновенно; Nemotron при F12
+# считает в фоне, его варианты появляются в Ctrl+F11. Break вставляет
+# результат Nemotron.
+[nemotron]
+enabled = true
+socket_path = ""          # пусто → /run/user/<uid>/murrly-nemotron.sock
+lang = "ru-RU"
+boost_alpha = 0.5         # вес биасинга терминов (0 = выкл; >0.5 портит обычную речь)
+
 [output]
 paste_delay_ms = 80
 restore_primary = true

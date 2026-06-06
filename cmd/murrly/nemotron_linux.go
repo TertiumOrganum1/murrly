@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tertiumorganum1/murrly/internal/app"
+	"github.com/tertiumorganum1/murrly/internal/config"
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
 	"github.com/tertiumorganum1/murrly/internal/nemotron"
 )
@@ -63,12 +64,23 @@ func (m *engineManager) Run(pcm []float32, leadOffsetSec float64, multi bool) []
 // connection just yields no variants (logged), so Break degrades to nothing
 // inserted and the F12 background fill is skipped. Hotkey-registration
 // failure is non-fatal.
-func setupNemotron(events chan app.Event) app.NemotronEngine {
-	sock := os.Getenv("MURRLY_NEMOTRON_SOCK")
+func setupNemotron(events chan app.Event, ncfg config.NemotronConfig) app.NemotronEngine {
+	if !ncfg.Enabled {
+		log.Printf("nemotron: disabled in config")
+		return nil
+	}
+	sock := ncfg.SocketPath
+	if sock == "" {
+		sock = os.Getenv("MURRLY_NEMOTRON_SOCK")
+	}
 	if sock == "" {
 		sock = fmt.Sprintf("/run/user/%d/murrly-nemotron.sock", os.Getuid())
 	}
-	client := nemotron.New(nemotron.Config{SocketPath: sock, Lang: "ru-RU", Alpha: 0.5})
+	lang := ncfg.Lang
+	if lang == "" {
+		lang = "ru-RU"
+	}
+	client := nemotron.New(nemotron.Config{SocketPath: sock, Lang: lang, Alpha: ncfg.BoostAlpha})
 
 	// Break: record → Nemotron → insert best Nemotron.
 	if bhk, err := hotkey.New("pause"); err != nil {

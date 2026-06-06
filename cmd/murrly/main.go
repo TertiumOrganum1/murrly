@@ -365,7 +365,7 @@ func main() {
 	// nil elsewhere). F12 stays on the fast Whisper path above; Break runs
 	// Nemotron, and F12 also fires Nemotron in the background to fill the
 	// Ctrl+F11 picker without delaying the Whisper insert.
-	if nemo := setupNemotron(events); nemo != nil {
+	if nemo := setupNemotron(events, cfg.Nemotron); nemo != nil {
 		appCfg.Nemotron = nemo
 	}
 	if multiRunner != nil || appCfg.Nemotron != nil {
