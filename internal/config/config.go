@@ -34,28 +34,28 @@ type WhisperConfig struct {
 	// Model is a short name like "large-v3", "large-v3-turbo",
 	// "large-v3-turbo-q5_0". Resolved to <ModelsDir>/ggml-<Model>.bin.
 	// Takes precedence over ModelPath when set.
-	Model         string `toml:"model"`
+	Model string `toml:"model"`
 	// ModelPath is an absolute or ~-expanded path to a .bin file.
 	// Used directly if set and Model is empty.
-	ModelPath     string `toml:"model_path"`
-	Device        string `toml:"device"`
-	ComputeType   string `toml:"compute_type"`
-	Language      string `toml:"language"`
-	BeamSize      int    `toml:"beam_size"`
+	ModelPath   string `toml:"model_path"`
+	Device      string `toml:"device"`
+	ComputeType string `toml:"compute_type"`
+	Language    string `toml:"language"`
+	BeamSize    int    `toml:"beam_size"`
 	// BeamAdaptive — opt-in: short clips use beam_size=1 (effectively
 	// greedy), clips past the long-audio threshold use the upstream
 	// beam_search default of 5. Useful on macOS where the configured
 	// beam stays at 1 for speed, but long dictations would otherwise
 	// risk losing punctuation. Visible in the default config so users
 	// know the knob exists.
-	BeamAdaptive  bool   `toml:"beam_adaptive"`
+	BeamAdaptive bool `toml:"beam_adaptive"`
 	// PadSilence — when true, every clip is wrapped in 1 s of zero
 	// samples at both ends before reaching Whisper. Each manual
 	// "Перепроцессить" click then stacks another 1 s of leading
 	// silence on top. Exposed in config.toml so the default state
 	// survives restarts; flipped at runtime via the tray's "Тишина
 	// по краям" toggle.
-	PadSilence    bool   `toml:"pad_silence"`
+	PadSilence bool `toml:"pad_silence"`
 	// MultiInferenceCount — how many parallel inference variants to run
 	// per recording. 1 = single pass (current behavior, no picker).
 	// 2..8 = that many Whisper contexts run the same audio with
@@ -69,7 +69,7 @@ type WhisperConfig struct {
 	// or "heuristic" (text-shape only). Switchable live from the tray.
 	// Empty is normalized to "combined" on load. Ignored when
 	// multi_inference_count == 1.
-	ScoringMode   string `toml:"scoring_mode"`
+	ScoringMode string `toml:"scoring_mode"`
 	// MultiInference is the live on/off switch for multi-inference. When
 	// multi_inference_count > 1 the engine is always built, but this flag
 	// decides whether F12 runs the full variant batch (true) or just a
@@ -112,11 +112,11 @@ func defaults() Config {
 			// by default (MODEL=large-v3-turbo). Users who run MODELS=all can
 			// switch via the tray menu, which writes a non-empty Model
 			// short-name back to config.
-			Model:         "",
-			ModelPath:     "", // optional absolute path; ignored if Model is set
-			Device:        "cuda",
-			ComputeType:   "float16",
-			Language:      "",
+			Model:               "",
+			ModelPath:           "", // optional absolute path; ignored if Model is set
+			Device:              "cuda",
+			ComputeType:         "float16",
+			Language:            "",
 			BeamSize:            defaultBeamSize(),            // platform-tuned: Linux 5, macOS 1
 			BeamAdaptive:        false,                        // opt-in; set true to get short=1 / long=5 dynamic switching
 			PadSilence:          false,                        // opt-in; wrap every clip in 1 s silence padding
