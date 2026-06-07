@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -640,76 +641,45 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		start = len(variants) - 8
 	}
 	shown := variants[start:]
-	// Star the variant that was actually auto-inserted (the pressed engine's
-	// best); fall back to highest score only if nothing is flagged.
-	star := -1
-	for i := range shown {
-		if shown[i].Inserted {
-			star = i
-			break
+	// Display order: all Whisper first, then all Nemotron; each group sorted
+	// by its own score (descending). `order` maps display position → index
+	// into `shown`, so the clicked card maps back to the right variant.
+	order := make([]int, len(shown))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		va, vb := shown[order[a]], shown[order[b]]
+		if ga, gb := groupRank(va.Model), groupRank(vb.Model); ga != gb {
+			return ga < gb
 		}
-	}
-	if star < 0 {
-		star = bestVariant(shown)
-	}
-	// Per-card score badge "X/Y": X = 0..10 among ALL shown variants
-	// (rough — Whisper/Nemotron scales differ), Y = 0..10 among variants of
-	// the SAME model (the meaningful one).
-	oMin, oMax := scoreRange(shown, "")
-	opts := make([]string, len(shown))
-	for i, v := range shown {
-		mMin, mMax := scoreRange(shown, v.Model)
+		return va.Score > vb.Score
+	})
+	opts := make([]string, len(order))
+	for d, si := range order {
+		v := shown[si]
 		prefix := ""
-		if i == star {
-			prefix = "★ "
+		if v.Inserted {
+			prefix = "★ " // the variant actually inserted last time
 		}
-		opts[i] = fmt.Sprintf("%s%d/%d %s%s",
-			prefix, norm10(v.Score, oMin, oMax), norm10(v.Score, mMin, mMax),
-			modelGlyph(v.Model), variantPreview(v.Text))
+		// Raw per-model score (Whisper ∈[0,1], Nemotron its hybrid scale).
+		// No cross-model normalization — that only mislead (different scales).
+		opts[d] = fmt.Sprintf("%s%s%.2f  %s", prefix, modelGlyph(v.Model), v.Score, variantPreview(v.Text))
 	}
-	idx, ok := picker.Pick("", opts)
-	if !ok {
+	d, ok := picker.Pick("", opts)
+	if !ok || d < 0 || d >= len(order) {
 		return 0, false
 	}
-	return start + idx, true
+	return start + order[d], true
 }
 
-// scoreRange returns the min and max Score among shown variants; model=="" =
-// all of them, otherwise only those of that model. (first==max when one item.)
-func scoreRange(vs []app.Variant, model string) (min, max float64) {
-	first := true
-	for _, v := range vs {
-		if model != "" && v.Model != model {
-			continue
-		}
-		if first {
-			min, max, first = v.Score, v.Score, false
-			continue
-		}
-		if v.Score < min {
-			min = v.Score
-		}
-		if v.Score > max {
-			max = v.Score
-		}
+// groupRank orders the picker groups: Whisper (and unknown) first, Nemotron
+// after.
+func groupRank(model string) int {
+	if model == app.ModelNemotron {
+		return 1
 	}
-	return min, max
-}
-
-// norm10 maps a score linearly into 0..10 within [min,max]. All-equal (or a
-// lone item) → 10 (everything is "best").
-func norm10(s, min, max float64) int {
-	if max <= min {
-		return 10
-	}
-	n := int(10*(s-min)/(max-min) + 0.5)
-	if n < 0 {
-		n = 0
-	}
-	if n > 10 {
-		n = 10
-	}
-	return n
+	return 0
 }
 
 // modelGlyph prefixes a per-engine marker so the picker shows which model
