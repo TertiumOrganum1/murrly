@@ -670,12 +670,17 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		if mark != "" {
 			mark += " "
 		}
-		// Two raw scores, slashed: the model's OWN internal number / our
-		// 7-criteria cross score. The first is always the engine-native value
-		// (Whisper confidence ∈[0,1]; Nemotron RNNT hyp score — large
-		// negative) regardless of the scoreMode menu setting (that only
-		// affects which variant is inserted). The second is always ours.
-		opts[d] = fmt.Sprintf("%s%s%.2f/%.2f  %s", mark, modelGlyph(v.Model), v.Confidence, crossjudge.Score(v.Text, ""), variantPreview(v.Text))
+		// "<internal>/<our>": internal = model-native confidence, our = the
+		// 7-criteria cross score. Whisper exposes a real mean-token
+		// probability ∈[0,1]; Nemotron's RNNT path exposes no usable
+		// confidence (raw score isn't a probability and NeMo's token
+		// confidence is empty in streaming), so we show "—" rather than a
+		// fake number. The scoreMode menu affects only insertion, not display.
+		internal := "—"
+		if v.Model != app.ModelNemotron {
+			internal = fmt.Sprintf("%.2f", v.Confidence)
+		}
+		opts[d] = fmt.Sprintf("%s%s%s/%.2f  %s", mark, modelGlyph(v.Model), internal, crossjudge.Score(v.Text, ""), variantPreview(v.Text))
 	}
 	d, ok := picker.Pick("", opts)
 	if !ok || d < 0 || d >= len(order) {
