@@ -72,6 +72,11 @@ type Variant struct {
 	// Empty on the legacy single-engine paths. Drives per-model best
 	// selection (F12 → Whisper, Break → Nemotron) and the picker glyph.
 	Model string
+	// Inserted marks the variant that was actually auto-inserted for this
+	// dictation (the pressed engine's best). The picker stars THIS one,
+	// instead of a cross-model "highest score" that compares incomparable
+	// Whisper/Nemotron scales and lands on the wrong card.
+	Inserted bool
 }
 
 // Engine model tags carried on Variant.Model.
@@ -240,6 +245,17 @@ func (a *App) appendVariantsGen(gen uint64, vs []Variant) bool {
 	}
 	a.lastVariants = append(a.lastVariants, vs...)
 	return true
+}
+
+// markInserted flags lastVariants[idx] as the auto-inserted variant and
+// clears the flag on the rest, so the picker stars exactly what landed in
+// the window (not a cross-model "highest score").
+func (a *App) markInserted(idx int) {
+	a.varMu.Lock()
+	for i := range a.lastVariants {
+		a.lastVariants[i].Inserted = i == idx
+	}
+	a.varMu.Unlock()
 }
 
 func (a *App) curGen() uint64 {
@@ -475,20 +491,24 @@ func (a *App) reprocess() {
 		a.multiRound++
 		offset := float64(a.multiRound*a.cfg.MultiTranscriber.Count()) * multiReprocessStepSec
 		a.runMulti(a.lastPCM, offset, fmt.Sprintf("reprocess #%d", a.multiRound))
-		return
+	} else {
+		a.reprocessAttempts++
+		startPad := reprocessSilencePadSec * float64(a.reprocessAttempts)
+		endPad := 0.0
+		if a.padSilence.Load() {
+			startPad += baselineSilencePadStartSec
+			endPad = baselineSilencePadEndSec
+		}
+		padded := padPCM(a.lastPCM, startPad, endPad)
+		origSec := float64(len(a.lastPCM)) / float64(pcmSampleRateHz)
+		log.Printf("reprocess: attempt #%d, re-running last %.2fs of audio with %.1fs leading, %.1fs trailing silence", a.reprocessAttempts, origSec, startPad, endPad)
+		a.transcribeAndPaste(padded)
 	}
-
-	a.reprocessAttempts++
-	startPad := reprocessSilencePadSec * float64(a.reprocessAttempts)
-	endPad := 0.0
-	if a.padSilence.Load() {
-		startPad += baselineSilencePadStartSec
-		endPad = baselineSilencePadEndSec
+	// Ctrl+F12 also refreshes Nemotron in the background, so Ctrl+F11 after
+	// a reprocess still surfaces Nemotron's take alongside Whisper's.
+	if a.cfg.Nemotron != nil {
+		a.kickNemotronBackground(a.lastPCM, 0)
 	}
-	padded := padPCM(a.lastPCM, startPad, endPad)
-	origSec := float64(len(a.lastPCM)) / float64(pcmSampleRateHz)
-	log.Printf("reprocess: attempt #%d, re-running last %.2fs of audio with %.1fs leading, %.1fs trailing silence", a.reprocessAttempts, origSec, startPad, endPad)
-	a.transcribeAndPaste(padded)
 }
 
 // padPCM returns a new buffer with startSec of zero samples
@@ -568,6 +588,7 @@ func (a *App) runMulti(pcm []float32, leadOffsetSec float64, label string) {
 		a.setState(StateError)
 		return
 	}
+	a.markInserted(base) // star the Whisper best in the picker
 	a.setState(StateIdle)
 }
 
@@ -599,6 +620,7 @@ func (a *App) runNemotron(pcm []float32, leadOffsetSec float64, label string) {
 		a.setState(StateError)
 		return
 	}
+	a.markInserted(base) // star the Nemotron best in the picker
 	a.setState(StateIdle)
 }
 

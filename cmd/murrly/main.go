@@ -639,11 +639,22 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		start = len(variants) - 8
 	}
 	shown := variants[start:]
-	best := bestVariant(shown)
+	// Star the variant that was actually auto-inserted (the pressed engine's
+	// best); fall back to highest score only if nothing is flagged.
+	star := -1
+	for i := range shown {
+		if shown[i].Inserted {
+			star = i
+			break
+		}
+	}
+	if star < 0 {
+		star = bestVariant(shown)
+	}
 	opts := make([]string, len(shown))
 	for i, v := range shown {
 		p := modelGlyph(v.Model) + variantPreview(v.Text)
-		if i == best {
+		if i == star {
 			p = "★ " + p
 		}
 		opts[i] = p
