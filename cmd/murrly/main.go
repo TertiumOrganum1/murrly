@@ -670,10 +670,12 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		if mark != "" {
 			mark += " "
 		}
-		// Two raw scores, slashed: the engine's own internal score / our
-		// 7-criteria cross score. Raw (2 decimals), not normalized — that's
-		// what lets you actually study and compare the metrics.
-		opts[d] = fmt.Sprintf("%s%s%.2f/%.2f  %s", mark, modelGlyph(v.Model), v.Score, crossjudge.Score(v.Text, ""), variantPreview(v.Text))
+		// Two raw scores, slashed: the model's OWN internal number / our
+		// 7-criteria cross score. The first is always the engine-native value
+		// (Whisper confidence ∈[0,1]; Nemotron RNNT hyp score — large
+		// negative) regardless of the scoreMode menu setting (that only
+		// affects which variant is inserted). The second is always ours.
+		opts[d] = fmt.Sprintf("%s%s%.2f/%.2f  %s", mark, modelGlyph(v.Model), v.Confidence, crossjudge.Score(v.Text, ""), variantPreview(v.Text))
 	}
 	d, ok := picker.Pick("", opts)
 	if !ok || d < 0 || d >= len(order) {
