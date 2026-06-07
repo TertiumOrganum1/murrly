@@ -618,6 +618,7 @@ func (m *multiAdapter) Run(pcm []float32, leadOffsetSec float64) []app.Variant {
 			Score:      c.Score,
 			Confidence: c.Confidence,
 			PadLeadSec: c.PadLeadSec,
+			Model:      app.ModelWhisper, // so the picker shows the Ⓦ glyph
 		}
 	}
 	return out
