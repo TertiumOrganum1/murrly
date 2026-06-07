@@ -18,6 +18,7 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/autostart"
 	"github.com/tertiumorganum1/murrly/internal/clipboard"
 	"github.com/tertiumorganum1/murrly/internal/config"
+	"github.com/tertiumorganum1/murrly/internal/crossjudge"
 	"github.com/tertiumorganum1/murrly/internal/dockmenu"
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
 	"github.com/tertiumorganum1/murrly/internal/logfile"
@@ -655,16 +656,22 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		}
 		return va.Score > vb.Score
 	})
+	winner := crossWinnerIndex(shown) // best-Whisper vs best-Nemotron, ★
 	opts := make([]string, len(order))
 	for d, si := range order {
 		v := shown[si]
-		prefix := ""
+		mark := ""
 		if v.Inserted {
-			prefix = "★ " // the variant actually inserted last time
+			mark += "✓" // what was actually inserted
 		}
-		// Raw per-model score (Whisper ∈[0,1], Nemotron its hybrid scale).
-		// No cross-model normalization — that only mislead (different scales).
-		opts[d] = fmt.Sprintf("%s%s%.2f  %s", prefix, modelGlyph(v.Model), v.Score, variantPreview(v.Text))
+		if si == winner {
+			mark += "★" // the cross-engine ranker's pick of the two bests
+		}
+		if mark != "" {
+			mark += " "
+		}
+		// Per-model score on 0..10 (each engine's own scale, fixed cap → 10).
+		opts[d] = fmt.Sprintf("%s%s%d  %s", mark, modelGlyph(v.Model), score10(v.Model, v.Score), variantPreview(v.Text))
 	}
 	d, ok := picker.Pick("", opts)
 	if !ok || d < 0 || d >= len(order) {
@@ -680,6 +687,55 @@ func groupRank(model string) int {
 		return 1
 	}
 	return 0
+}
+
+// crossWinnerIndex picks which of the two engines' BEST variants reads
+// cleaner, for the ★ hint. Both are compared through the same Whisper
+// post-processing filter (Whisper text is already filtered; the Nemotron
+// text is run through it here, intermediate-only) so the comparison is fair.
+// Returns the index into shown of the winning variant, or -1 if empty.
+func crossWinnerIndex(shown []app.Variant) int {
+	bw, bn := -1, -1
+	for i := range shown {
+		if shown[i].Model == app.ModelNemotron {
+			if bn < 0 || shown[i].Score > shown[bn].Score {
+				bn = i
+			}
+		} else {
+			if bw < 0 || shown[i].Score > shown[bw].Score {
+				bw = i
+			}
+		}
+	}
+	if bw < 0 {
+		return bn
+	}
+	if bn < 0 {
+		return bw
+	}
+	if crossjudge.Better(shown[bw].Text, transcriber.FilterText(shown[bn].Text)) {
+		return bw
+	}
+	return bn
+}
+
+// score10 maps an engine's native score onto 0..10 against a fixed per-model
+// ceiling (Whisper ~0.8 = clean Russian; Nemotron hybrid ~6). Absolute, not
+// batch-relative — near-identical variants land on near-identical numbers
+// instead of being stretched across 0..10.
+func score10(model string, s float64) int {
+	ceil := 0.8
+	if model == app.ModelNemotron {
+		ceil = 6.0
+	}
+	n := int(s/ceil*10 + 0.5)
+	if n < 0 {
+		n = 0
+	}
+	if n > 10 {
+		n = 10
+	}
+	return n
 }
 
 // modelGlyph prefixes a per-engine marker so the picker shows which model

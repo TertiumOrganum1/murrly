@@ -13,9 +13,9 @@ import (
 )
 
 type Config struct {
-	ModelPath     string
-	Language      string // "" = auto-detect
-	BeamSize      int
+	ModelPath string
+	Language  string // "" = auto-detect
+	BeamSize  int
 	// BeamAdaptive: when true, beam dynamically scales with clip length —
 	// short clips use 1 (effectively greedy), long clips bump to
 	// longAudioBeamSize. When false, BeamSize is used unchanged for
@@ -365,9 +365,19 @@ const (
 //     whitespace between the terminator and the next letter — so
 //     "github.com" / "Node.js" aren't disturbed. Runs after
 //     addSentenceSpacing so spaces are already in place.
-// 10. finalizeTerminalPunctuation:  strip trailing ,/;/: and ensure
+//  10. finalizeTerminalPunctuation:  strip trailing ,/;/: and ensure
 //     the text ends with . / ! / ?, then a trailing space (for paste-
 //     time concatenation against following text).
+//
+// FilterText runs the full Whisper post-processing pipeline over a single
+// text. Exposed so the cross-engine ranker can put a Nemotron candidate on
+// the same footing as Whisper output (repeat-collapse, filler-strip,
+// capitalisation, terminal punctuation) before comparing the two. It does
+// NOT change what Nemotron actually inserts — that stays lightly formatted.
+func FilterText(text string) string {
+	return formatSegments([]string{text})
+}
+
 func formatSegments(segments []string) string {
 	text := strings.Join(segments, " ")
 	// Ellipsis normalisation must go before removeHallucinations:
