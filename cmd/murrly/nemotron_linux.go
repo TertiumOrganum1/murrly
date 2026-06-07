@@ -39,6 +39,13 @@ func (m *engineManager) Run(pcm []float32, leadOffsetSec float64, multi bool) []
 	cands, err := m.nemo.Recognize(pcm, n)
 	if err != nil {
 		log.Printf("nemotron: %v", err)
+		// If the sidecar is unreachable AND not currently up/loading, systemd
+		// has given up retrying — kick a fresh restart so it's back for the
+		// next dictation. If it's active (running or mid-load), leave it.
+		if !nemotronservice.IsActive() {
+			log.Printf("nemotron: sidecar not active — kicking a restart for next time")
+			go func() { _ = nemotronservice.Restart() }()
+		}
 		return nil
 	}
 	out := make([]app.Variant, 0, len(cands))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -651,19 +652,64 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 	if star < 0 {
 		star = bestVariant(shown)
 	}
+	// Per-card score badge "X/Y": X = 0..10 among ALL shown variants
+	// (rough — Whisper/Nemotron scales differ), Y = 0..10 among variants of
+	// the SAME model (the meaningful one).
+	oMin, oMax := scoreRange(shown, "")
 	opts := make([]string, len(shown))
 	for i, v := range shown {
-		p := modelGlyph(v.Model) + variantPreview(v.Text)
+		mMin, mMax := scoreRange(shown, v.Model)
+		prefix := ""
 		if i == star {
-			p = "★ " + p
+			prefix = "★ "
 		}
-		opts[i] = p
+		opts[i] = fmt.Sprintf("%s%d/%d %s%s",
+			prefix, norm10(v.Score, oMin, oMax), norm10(v.Score, mMin, mMax),
+			modelGlyph(v.Model), variantPreview(v.Text))
 	}
 	idx, ok := picker.Pick("", opts)
 	if !ok {
 		return 0, false
 	}
 	return start + idx, true
+}
+
+// scoreRange returns the min and max Score among shown variants; model=="" =
+// all of them, otherwise only those of that model. (first==max when one item.)
+func scoreRange(vs []app.Variant, model string) (min, max float64) {
+	first := true
+	for _, v := range vs {
+		if model != "" && v.Model != model {
+			continue
+		}
+		if first {
+			min, max, first = v.Score, v.Score, false
+			continue
+		}
+		if v.Score < min {
+			min = v.Score
+		}
+		if v.Score > max {
+			max = v.Score
+		}
+	}
+	return min, max
+}
+
+// norm10 maps a score linearly into 0..10 within [min,max]. All-equal (or a
+// lone item) → 10 (everything is "best").
+func norm10(s, min, max float64) int {
+	if max <= min {
+		return 10
+	}
+	n := int(10*(s-min)/(max-min) + 0.5)
+	if n < 0 {
+		n = 0
+	}
+	if n > 10 {
+		n = 10
+	}
+	return n
 }
 
 // modelGlyph prefixes a per-engine marker so the picker shows which model

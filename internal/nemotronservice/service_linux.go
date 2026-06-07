@@ -10,7 +10,16 @@ import "os/exec"
 const Unit = "murrly-nemotron.service"
 
 // Restart restarts the sidecar service. Used by the tray's "Перезапустить
-// Nemotron" item when the sidecar wedges (CUDA hiccup, stuck decode).
+// Nemotron" item when the sidecar wedges (CUDA hiccup, stuck decode), and by
+// the recognition path to revive a sidecar that systemd gave up on.
 func Restart() error {
 	return exec.Command("systemctl", "--user", "restart", Unit).Run()
+}
+
+// IsActive reports whether the service is running (or starting up). False
+// means it failed / was stopped — i.e. systemd's retries were exhausted, so
+// a recognition attempt should kick a fresh restart. True (active/activating)
+// means it's up or still loading the model — leave it alone.
+func IsActive() bool {
+	return exec.Command("systemctl", "--user", "is-active", "--quiet", Unit).Run() == nil
 }
