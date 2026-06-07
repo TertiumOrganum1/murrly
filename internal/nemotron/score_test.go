@@ -26,11 +26,11 @@ func TestHybridScorePenalisesStutter(t *testing.T) {
 	}
 }
 
-func TestHybridScoreRawTiebreak(t *testing.T) {
-	// Same text, better (less-negative) raw should win.
-	a := HybridScore("одинаковый текст.", -500)
-	b := HybridScore("одинаковый текст.", -2000)
+func TestHybridScoreConfidenceTiebreak(t *testing.T) {
+	// Same text, higher per-token confidence should win.
+	a := HybridScore("одинаковый текст.", 0.9)
+	b := HybridScore("одинаковый текст.", 0.5)
 	if a <= b {
-		t.Fatalf("less-negative raw (%.2f) should beat more-negative (%.2f)", a, b)
+		t.Fatalf("higher confidence (%.2f) should beat lower (%.2f)", a, b)
 	}
 }

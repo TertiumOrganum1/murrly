@@ -20,15 +20,14 @@ var sentenceEndRe = regexp.MustCompile(`[.!?]["»)]?\s*$`)
 // We deliberately do NOT reuse Whisper's metric here; Nemotron's strengths
 // and failure modes differ (it doesn't slide into Whisper's "simple mode",
 // but can stutter or drop a final period on short fragments).
-func HybridScore(text string, raw float64) float64 {
+func HybridScore(text string, conf float64) float64 {
 	t := strings.TrimSpace(text)
 	if t == "" {
 		return -1e18
 	}
-	// Raw score is large-negative and grows with length; a small weight
-	// makes it a tiebreak among same-utterance variants without letting it
-	// swamp the heuristics.
-	score := raw * 0.0002
+	// conf is the model's mean per-token probability ∈(0,1] (computed by the
+	// sidecar as exp(score/ntokens)); weight it on par with the text bonuses.
+	score := 3.0 * conf
 	if sentenceEndRe.MatchString(t) {
 		score += 3 // ends on a real terminator
 	}
