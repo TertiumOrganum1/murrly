@@ -5,22 +5,34 @@ package paster
 import (
 	"os/exec"
 	"regexp"
+	"time"
 )
 
 var capsLockOnRe = regexp.MustCompile(`(?i)Caps Lock:\s*on`)
 
-// Paste sends Ctrl+V to the currently focused window via xdotool.
-// --clearmodifiers releases any held modifier so the user's Shift/Ctrl
-// state doesn't garble the synthetic chord. But xdotool's handling of
-// CapsLock under that flag is unreliable: it "releases" the toggle by
-// sending CapsLock once (flipping state off) and intermittently fails
-// to send the restoring press, leaving the user with CapsLock off
-// after every paste. Snapshot via `xset q` around the call and replay
-// a Caps_Lock toggle if state ended up flipped. NumLock doesn't hit
-// this path — xdotool restores it reliably.
+// pasteSettleDelay waits for the push-to-talk key (F12 / Break) to finish
+// releasing before the synthetic Ctrl+V. Without it the modifier race —
+// the physical key still going up while we press Ctrl — intermittently
+// dropped the Ctrl and typed a literal "v" instead of pasting. ~1/3 s is
+// generous; lower it if the insert feels laggy.
+const pasteSettleDelay = 300 * time.Millisecond
+
+// Paste sends Ctrl+V to the currently focused window via xdotool. The
+// modifier is held explicitly (keydown ctrl → key v → keyup ctrl) rather
+// than via a single `key ctrl+v`, so Ctrl is guaranteed down for the v —
+// the one-shot chord sometimes lost the modifier and pasted nothing (just
+// "v"). --clearmodifiers on the keydown releases the user's own held
+// modifiers first. CapsLock handling: xdotool under --clearmodifiers can
+// flip CapsLock off and fail to restore it, so snapshot via `xset q` and
+// replay a Caps_Lock toggle if it ended up flipped.
 func (p *Paster) Paste() error {
+	time.Sleep(pasteSettleDelay)
 	capsBefore := capsLockOn()
-	err := exec.Command("xdotool", "key", "--clearmodifiers", "ctrl+v").Run()
+	if err := exec.Command("xdotool", "keydown", "--clearmodifiers", "ctrl").Run(); err != nil {
+		return err
+	}
+	_ = exec.Command("xdotool", "key", "--delay", "30", "v").Run()
+	err := exec.Command("xdotool", "keyup", "ctrl").Run()
 	if capsBefore != capsLockOn() {
 		_ = exec.Command("xdotool", "key", "Caps_Lock").Run()
 	}
