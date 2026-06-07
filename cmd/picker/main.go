@@ -148,8 +148,10 @@ func newPickerWindow(a fyne.App, options []string) fyne.Window {
 
 	cards := make([]fyne.CanvasObject, 0, len(options))
 	for i, opt := range options {
-		wrapped := fitLines(oneLine(opt), availWidth, textSize, style, maxCardLines)
-		cards = append(cards, newCard(i, wrapped, func(idx int) {
+		// Wrap to ALL lines (not truncated): the card shows a maxCardLines
+		// window and the mouse wheel scrolls the rest when the card is hovered.
+		lines := wrapWords(oneLine(opt), availWidth, textSize, style)
+		cards = append(cards, newCard(i, lines, maxCardLines, func(idx int) {
 			fmt.Println(idx)
 			w.Close()
 		}))
@@ -260,34 +262,81 @@ var (
 )
 
 // card is a flat, full-width clickable panel showing a variant's text.
-// Background lightens on hover; a tap fires onTap(index) and closes.
+// Background lightens on hover; a tap fires onTap(index) and closes. The card
+// shows a `visible`-line window into the full wrapped text; when hovered, the
+// mouse wheel scrolls that window so long variants can be read in full.
 type card struct {
 	widget.BaseWidget
-	index int
-	text  string
-	onTap func(int)
+	index   int
+	lines   []string // full wrapped text, one entry per line
+	visible int      // lines shown at once (window height)
+	offset  int      // index of the first visible line
+	onTap   func(int)
 
-	bg *canvas.Rectangle
+	bg    *canvas.Rectangle
+	label *widget.Label
 }
 
-func newCard(index int, text string, onTap func(int)) *card {
-	c := &card{index: index, text: text, onTap: onTap}
+func newCard(index int, lines []string, visible int, onTap func(int)) *card {
+	c := &card{index: index, lines: lines, visible: visible, onTap: onTap}
 	c.ExtendBaseWidget(c)
 	return c
+}
+
+// view returns the current window of `visible` lines, padded with blank lines
+// so the card's height stays constant regardless of scroll position.
+func (c *card) view() string {
+	out := make([]string, c.visible)
+	for i := 0; i < c.visible; i++ {
+		if j := c.offset + i; j < len(c.lines) {
+			out[i] = c.lines[j]
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+func (c *card) maxOffset() int {
+	if len(c.lines) <= c.visible {
+		return 0
+	}
+	return len(c.lines) - c.visible
 }
 
 func (c *card) CreateRenderer() fyne.WidgetRenderer {
 	c.bg = canvas.NewRectangle(cardRest)
 	c.bg.CornerRadius = 6
-	label := widget.NewLabel(c.text)
-	label.Wrapping = fyne.TextWrapOff // text is pre-wrapped to maxCardLines with explicit newlines
-	padded := container.NewPadded(label)
+	c.label = widget.NewLabel(c.view())
+	c.label.Wrapping = fyne.TextWrapOff // pre-wrapped to fixed-width lines
+	padded := container.NewPadded(c.label)
 	return &cardRenderer{card: c, objects: []fyne.CanvasObject{c.bg, padded}, content: padded}
 }
 
 func (c *card) Tapped(*fyne.PointEvent) {
 	if c.onTap != nil {
 		c.onTap(c.index)
+	}
+}
+
+// Scrolled satisfies desktop.Scrollable: the wheel moves the visible window
+// over the card's text (only when the text is taller than the window).
+func (c *card) Scrolled(ev *fyne.ScrollEvent) {
+	mo := c.maxOffset()
+	if mo == 0 {
+		return
+	}
+	if ev.Scrolled.DY < 0 {
+		c.offset++
+	} else {
+		c.offset--
+	}
+	if c.offset < 0 {
+		c.offset = 0
+	}
+	if c.offset > mo {
+		c.offset = mo
+	}
+	if c.label != nil {
+		c.label.SetText(c.view())
 	}
 }
 
