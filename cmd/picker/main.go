@@ -283,14 +283,18 @@ func newCard(index int, lines []string, visible int, onTap func(int)) *card {
 	return c
 }
 
-// view returns the current window of `visible` lines, padded with blank lines
-// so the card's height stays constant regardless of scroll position.
+// view returns the current window of lines: min(len, visible) lines starting
+// at offset. Short variants get a short card (no empty padding); long ones get
+// a fixed visible-line window the wheel scrolls. offset is clamped so the
+// window is always full of real lines — height never jumps while scrolling.
 func (c *card) view() string {
-	out := make([]string, c.visible)
-	for i := 0; i < c.visible; i++ {
-		if j := c.offset + i; j < len(c.lines) {
-			out[i] = c.lines[j]
-		}
+	n := c.visible
+	if len(c.lines) < n {
+		n = len(c.lines)
+	}
+	out := make([]string, n)
+	for i := 0; i < n; i++ {
+		out[i] = c.lines[c.offset+i]
 	}
 	return strings.Join(out, "\n")
 }
