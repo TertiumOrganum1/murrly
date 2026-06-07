@@ -670,8 +670,10 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		if mark != "" {
 			mark += " "
 		}
-		// Per-model score on 0..10 (each engine's own scale, fixed cap → 10).
-		opts[d] = fmt.Sprintf("%s%s%d  %s", mark, modelGlyph(v.Model), score10(v.Model, v.Score), variantPreview(v.Text))
+		// Two raw scores, slashed: the engine's own internal score / our
+		// 7-criteria cross score. Raw (2 decimals), not normalized — that's
+		// what lets you actually study and compare the metrics.
+		opts[d] = fmt.Sprintf("%s%s%.2f/%.2f  %s", mark, modelGlyph(v.Model), v.Score, crossjudge.Score(v.Text, ""), variantPreview(v.Text))
 	}
 	d, ok := picker.Pick("", opts)
 	if !ok || d < 0 || d >= len(order) {
@@ -717,25 +719,6 @@ func crossWinnerIndex(shown []app.Variant) int {
 		return bw
 	}
 	return bn
-}
-
-// score10 maps an engine's native score onto 0..10 against a fixed per-model
-// ceiling (Whisper ~0.8 = clean Russian; Nemotron hybrid ~6). Absolute, not
-// batch-relative — near-identical variants land on near-identical numbers
-// instead of being stretched across 0..10.
-func score10(model string, s float64) int {
-	ceil := 0.8
-	if model == app.ModelNemotron {
-		ceil = 6.0
-	}
-	n := int(s/ceil*10 + 0.5)
-	if n < 0 {
-		n = 0
-	}
-	if n > 10 {
-		n = 10
-	}
-	return n
 }
 
 // modelGlyph prefixes a per-engine marker so the picker shows which model
