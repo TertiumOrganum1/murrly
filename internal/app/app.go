@@ -262,12 +262,9 @@ func (a *App) snapshotVariants() []Variant {
 // Go state with the engine — only lastVariants, which is mutex-guarded.
 func (a *App) kickNemotronBackground(pcm []float32, leadOffsetSec float64) {
 	gen := a.curGen()
+	multi := a.multiOn.Load()
 	go func() {
-		// Single variant for the background peek — it lands in ~2s and is
-		// reliably present by the time Ctrl+F11 is opened, instead of the
-		// ~8s a 4-variant batch needs on a long phrase. (Break still runs the
-		// full Nemotron batch — that path is opt-in and waited on.)
-		vs := a.cfg.Nemotron.Run(pcm, leadOffsetSec, false)
+		vs := a.cfg.Nemotron.Run(pcm, leadOffsetSec, multi)
 		if len(vs) == 0 {
 			return
 		}

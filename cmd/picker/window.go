@@ -57,9 +57,47 @@ func arrangeWindow() {
 			}
 		}
 		setOpacity(win, 1) // reveal, now at the final position
+		activateWindow(win)
+		go watchFocusDismiss(pid)
 		return
 	}
 	dbg("arrange: window never found within deadline")
+}
+
+// activateWindow gives the picker keyboard focus (so Esc works) and then
+// re-pins skip_taskbar/above, since activating can re-list the window.
+func activateWindow(win string) {
+	exec.Command("xdotool", "windowactivate", "--sync", win).Run()
+	setWindowFlags(win)
+}
+
+// watchFocusDismiss closes the picker as soon as keyboard focus leaves our
+// process — i.e. the user clicked anywhere outside it. Matched by PID so a
+// child/parent window id mismatch can't false-trigger. Waits until we've
+// actually held focus once before arming.
+func watchFocusDismiss(pid int) {
+	seen := false
+	for {
+		time.Sleep(150 * time.Millisecond)
+		fp := focusedPID()
+		if fp == pid {
+			seen = true
+			continue
+		}
+		if seen && fp > 0 {
+			os.Exit(1)
+		}
+	}
+}
+
+// focusedPID returns the PID owning the X11 window with input focus, or 0.
+func focusedPID() int {
+	out, err := exec.Command("xdotool", "getwindowfocus", "getwindowpid").Output()
+	if err != nil {
+		return 0
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	return pid
 }
 
 func dbg(format string, args ...any) {
