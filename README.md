@@ -4,12 +4,16 @@
 
 # Murrly
 
-Murrly — локальный push-to-talk ввод текста голосом для Linux и macOS (Apple Silicon).
-Удерживаете `F12`, говорите, отпускаете клавишу — распознанный текст
-вставляется в активное окно через буфер обмена.
-
-Распознавание работает локально через `whisper.cpp`. Аудио не отправляется во
+**Murrly** (он же **Murly** / **Мурли**) — локальное приложение для голосового
+ввода текста на Linux и macOS (Apple Silicon): push-to-talk диктовка и
+распознавание речи (speech-to-text). Удерживаете `F12`, говорите, отпускаете
+клавишу — распознанный текст вставляется в активное окно через буфер обмена.
+Написано на Go, работает офлайн через `whisper.cpp`; аудио не отправляется во
 внешние сервисы.
+
+Murrly is an offline, push-to-talk voice typing and dictation app for Linux and
+macOS. It does local speech-to-text / speech recognition with `whisper.cpp`,
+is written in Go, and never sends your audio to the cloud.
 
 ## Возможности
 
@@ -370,6 +374,15 @@ initial_prompt) скопируйте вручную из бэкапа.
 
 Это важно: модель большая, зависимости пересобираются локально, а локальные
 настройки не должны попадать в публичный GitHub.
+
+## Search aliases / Поисковые варианты
+
+Murrly may also be searched as **Murly** or **Мурли**. Проект может встречаться
+как Murrly, Murly или Мурли.
+
+Keywords / ключевые слова: voice typing, speech-to-text, speech recognition,
+dictation, push-to-talk, offline transcription, whisper.cpp, Go, Golang, Linux,
+macOS, голосовой ввод, распознавание речи, диктовка.
 
 ## Лицензия
 

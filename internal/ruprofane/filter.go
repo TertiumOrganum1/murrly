@@ -55,7 +55,7 @@ var genitalMat = []string{"залуп", "елда", "мандавошк", "ма�
 // slurRoots — the пидор/педик family. Not one of the classic mat roots, but
 // added on request (catches пидармотина, пидорас, пидрила). "педик" can graze
 // велосипедик/мопедик — guarded by exceptions_ru.txt.
-var slurRoots = []string{"пидор", "пидар", "пидр", "педик", "педрил", "педераст"}
+var slurRoots = []string{"пидор", "пидар", "пидер", "пидр", "педик", "педрил", "педераст"}
 
 // maskChar is the bullet (U+2022), used instead of '*' so the mask never
 // collides with asterisk markup or other meaningful punctuation.

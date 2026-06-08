@@ -28,6 +28,7 @@ func TestMasksMatKeepingFirstLetter(t *testing.T) {
 		"да мне похуй":      "да мне п••••",
 		"ну ты пидор":       "ну ты п••••",
 		"пидармотина":       "п••••••••••",
+		"пидермотина":       "п••••••••••",
 	}
 	for in, want := range cases {
 		if got := Filter(in); got != want {
@@ -61,6 +62,7 @@ func TestNoFalsePositives(t *testing.T) {
 		"лохматый пёс и переполох",
 		"мудрый изумруд",
 		"мой велосипедик и мопедик",
+		"человек паук спидермен",
 	}
 	for _, in := range clean {
 		if got := Filter(in); got != in {
