@@ -26,6 +26,8 @@ func TestMasksMatKeepingFirstLetter(t *testing.T) {
 		"разъебать всё":     "р•••••••• всё",
 		"долбоёб":           "д••••••",
 		"да мне похуй":      "да мне п••••",
+		"ну ты пидор":       "ну ты п••••",
+		"пидармотина":       "п••••••••••",
 	}
 	for in, want := range cases {
 		if got := Filter(in); got != want {
@@ -38,7 +40,7 @@ func TestNonMatLeftAlone(t *testing.T) {
 	SetEnabled(true)
 	defer SetEnabled(false)
 	// Rude but NOT mat — must stay untouched per "только жёсткий мат".
-	for _, in := range []string{"ты лох", "вот чмо", "жид", "пидор", "гондон", "сука", "жопа", "говно"} {
+	for _, in := range []string{"ты лох", "вот чмо", "жид", "гондон", "сука", "жопа", "говно"} {
 		if got := Filter(in); got != in {
 			t.Errorf("non-mat must be left alone: Filter(%q) = %q", in, got)
 		}
@@ -58,6 +60,7 @@ func TestNoFalsePositives(t *testing.T) {
 		"рубля за саблю с корабля",
 		"лохматый пёс и переполох",
 		"мудрый изумруд",
+		"мой велосипедик и мопедик",
 	}
 	for _, in := range clean {
 		if got := Filter(in); got != in {
