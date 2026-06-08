@@ -94,7 +94,40 @@ func (c *Clipboard) Save() (Saved, error) {
 }
 
 func (c *Clipboard) Set(text string) error {
-	return writeSelection("clipboard", text)
+	if err := writeSelection("clipboard", text); err != nil {
+		return err
+	}
+	// xclip claims the selection asynchronously after Start(), so Set used
+	// to return before the clipboard actually served `text`. Under load the
+	// Ctrl+V that follows could then fire while the PREVIOUS owner was still
+	// serving — intermittently pasting the stale clipboard instead of the
+	// dictation. Block until the selection really serves `text` (ownership
+	// claimed) before returning.
+	confirmSelection("clipboard", text, clipboardClaimTimeout)
+	return nil
+}
+
+// clipboardClaimTimeout bounds how long Set waits for xclip to take
+// ownership of the clipboard before giving up and letting the paste proceed
+// anyway (best effort — better than blocking the insert forever).
+const clipboardClaimTimeout = 1 * time.Second
+
+// confirmSelection polls the selection until it serves `want` (our xclip has
+// claimed ownership) or the timeout elapses. Cheap in the common case (the
+// claim lands within a few ms → one read); only spins under contention.
+func confirmSelection(sel, want string, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		out, err := xclipOutput("-selection", sel, "-o")
+		if err == nil && string(out) == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			log.Printf("clipboard: selection %q not confirmed within %v; pasting anyway", sel, timeout)
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 func (c *Clipboard) Restore(s Saved) error {
