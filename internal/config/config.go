@@ -84,6 +84,11 @@ type WhisperConfig struct {
 type OutputConfig struct {
 	PasteDelayMs   int  `toml:"paste_delay_ms"`
 	RestorePrimary bool `toml:"restore_primary"`
+	// ProfanityFilter — when true, Russian obscene words (мат) are masked
+	// with bullets at display (picker) and insertion only; the recognized
+	// text is always stored/scored uncensored. Opt-in; flipped at runtime
+	// via the tray "Фильтр мата" toggle and persisted here.
+	ProfanityFilter bool `toml:"profanity_filter"`
 }
 
 // NemotronConfig configures the second engine (Linux-only; the Break key).
@@ -132,7 +137,7 @@ func defaults() Config {
 		// step. Too short and the focused app reads the restored (old) clipboard
 		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip
 		// tolerates lower values.
-		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true},
+		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: false},
 	}
 }
 

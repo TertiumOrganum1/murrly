@@ -31,6 +31,7 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/paths"
 	"github.com/tertiumorganum1/murrly/internal/picker"
 	"github.com/tertiumorganum1/murrly/internal/recorder"
+	"github.com/tertiumorganum1/murrly/internal/ruprofane"
 	"github.com/tertiumorganum1/murrly/internal/transcriber"
 	"github.com/tertiumorganum1/murrly/internal/transcripthistory"
 	"github.com/tertiumorganum1/murrly/internal/tray"
@@ -64,6 +65,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	// Apply the persisted profanity-filter state before anything can display
+	// or insert text; the tray toggle flips it live afterwards.
+	ruprofane.SetEnabled(cfg.Output.ProfanityFilter)
 
 	if !macospermissions.EnsureAccessibility() {
 		// First-launch prompt. macOS only shows the system alert once
@@ -250,6 +254,16 @@ func main() {
 				log.Printf("pad-silence persist: %v", err)
 			}
 			cfg.Whisper.PadSilence = newState
+			return newState
+		},
+		IsProfanityOn: ruprofane.Enabled,
+		OnToggleProfanity: func() bool {
+			newState := !ruprofane.Enabled()
+			ruprofane.SetEnabled(newState)
+			if err := persistProfanityFilter(cfgPath, cfg, newState); err != nil {
+				log.Printf("profanity-filter persist: %v", err)
+			}
+			cfg.Output.ProfanityFilter = newState
 			return newState
 		},
 		OnQuit: func() { cancel(); t.Quit() },
@@ -680,7 +694,10 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		if v.Model != app.ModelNemotron {
 			internal = fmt.Sprintf("%.2f", v.Confidence)
 		}
-		opts[d] = fmt.Sprintf("%s%s%s/%.2f  %s", mark, modelGlyph(v.Model), internal, crossjudge.Score(v.Text, ""), variantPreview(v.Text))
+		// Score on the ORIGINAL text; censor only what is shown (toggle-gated,
+		// no-op when off) so the picker never displays mat while the ranking
+		// still reflects the real recognition.
+		opts[d] = fmt.Sprintf("%s%s%s/%.2f  %s", mark, modelGlyph(v.Model), internal, crossjudge.Score(v.Text, ""), variantPreview(ruprofane.Filter(v.Text)))
 	}
 	d, ok := picker.Pick("", opts)
 	if !ok || d < 0 || d >= len(order) {

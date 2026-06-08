@@ -160,3 +160,16 @@ func persistScoringMode(cfgPath string, cfg config.Config, mode string) error {
 	defer f.Close()
 	return toml.NewEncoder(f).Encode(cfg)
 }
+
+// persistProfanityFilter writes the profanity-filter on/off toggle to
+// config.toml so the menu choice survives a restart. Same whole-struct
+// re-encode as the other persist helpers.
+func persistProfanityFilter(cfgPath string, cfg config.Config, on bool) error {
+	cfg.Output.ProfanityFilter = on
+	f, err := os.Create(cfgPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}

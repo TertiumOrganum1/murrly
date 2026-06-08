@@ -169,6 +169,9 @@ func (t *Tray) onReady() {
 	padSilenceChecked := t.actions.IsPadSilenceOn != nil && t.actions.IsPadSilenceOn()
 	padSilenceItem := systray.AddMenuItemCheckbox("Тишина по краям", "Добавлять 1 с тишины с обеих сторон каждой записи перед Whisper", padSilenceChecked)
 
+	profanityChecked := t.actions.IsProfanityOn != nil && t.actions.IsProfanityOn()
+	profanityItem := systray.AddMenuItemCheckbox("Фильтр мата", "Маскировать русский мат символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
+
 	// Nemotron group (Linux only — shown when the restart callback is wired).
 	// A disabled status line shows the ~48 s model load; a restart item
 	// recovers a wedged sidecar.
@@ -351,6 +354,14 @@ func (t *Tray) onReady() {
 						padSilenceItem.Check()
 					} else {
 						padSilenceItem.Uncheck()
+					}
+				}
+			case <-profanityItem.ClickedCh:
+				if t.actions.OnToggleProfanity != nil {
+					if t.actions.OnToggleProfanity() {
+						profanityItem.Check()
+					} else {
+						profanityItem.Uncheck()
 					}
 				}
 			case <-quitItem.ClickedCh:

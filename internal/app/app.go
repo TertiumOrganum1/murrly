@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tertiumorganum1/murrly/internal/ruprofane"
 )
 
 type State int
@@ -661,6 +663,11 @@ func (a *App) insertText(text string) error {
 	if a.cfg.AdjustText != nil {
 		text = a.cfg.AdjustText(text)
 	}
+	// Censor обсценную лексику at the very last step before it lands in the
+	// clipboard. The stored/scored text (and OnTranscript above) keeps the
+	// uncensored original; this is a view-only transform, no-op when the
+	// tray toggle is off, so a false positive never destroys the phrase.
+	text = ruprofane.Filter(text)
 
 	saved, err := a.cfg.Clipboard.Save()
 	if err != nil {
