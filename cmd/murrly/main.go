@@ -493,7 +493,7 @@ func main() {
 // menu maps to scoringModeOrder[i].
 var (
 	scoringModeOrder  = []multiinfer.ScoreMode{multiinfer.ScoreCombined, multiinfer.ScoreConfidence, multiinfer.ScoreHeuristic}
-	scoringModeLabels = []string{"вместе", "только Whisper", "только эвристика"}
+	scoringModeLabels = []string{"уверенность + наша", "только уверенность", "только наша метрика"}
 )
 
 // scoringIndexOf returns the menu row for a mode (0 = combined default).
@@ -672,12 +672,12 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		}
 		return va.Score > vb.Score
 	})
-	// ★ marks the best variant by our 7-criteria score within EACH engine
-	// group — so both the best Whisper and the best Nemotron get a star
-	// (Nemotron has no usable internal score, so our criterion is the only
-	// "best" signal it has).
-	bestW := bestCrossInGroup(shown, false)
-	bestN := bestCrossInGroup(shown, true)
+	// ★ marks the best variant in EACH engine group by the SAME principle the
+	// menu selected (v.Score = that principle: confidence / our cross score /
+	// blend) — so ★ lands on whatever the chosen metric ranks first, and the
+	// inserted ✓ (also the top by that metric) coincides with its group's ★.
+	bestW := bestByScoreInGroup(shown, false)
+	bestN := bestByScoreInGroup(shown, true)
 	opts := make([]string, len(order))
 	for d, si := range order {
 		v := shown[si]
@@ -722,22 +722,20 @@ func groupRank(model string) int {
 	return 0
 }
 
-// bestCrossInGroup returns the index into shown of the variant with the
-// highest 7-criteria cross score within one engine group (nemotron=true →
-// Nemotron variants, false → Whisper and any untagged). -1 if the group is
-// empty. ★ marks this per group, so each engine's best is starred — for
-// Nemotron our criterion is the only "best" signal, since it exposes no
-// usable internal confidence.
-func bestCrossInGroup(shown []app.Variant, nemotron bool) int {
+// bestByScoreInGroup returns the index into shown of the highest-v.Score
+// variant within one engine group (nemotron=true → Nemotron, false → Whisper
+// and any untagged). -1 if the group is empty. v.Score is whatever the active
+// menu principle produced (confidence / our cross score / blend), so ★ follows
+// the user's choice and coincides with the inserted ✓ for that engine.
+func bestByScoreInGroup(shown []app.Variant, nemotron bool) int {
 	best := -1
 	var bestScore float64
 	for i := range shown {
 		if (shown[i].Model == app.ModelNemotron) != nemotron {
 			continue
 		}
-		s := crossjudge.Score(shown[i].Text, "")
-		if best < 0 || s > bestScore {
-			best, bestScore = i, s
+		if best < 0 || shown[i].Score > bestScore {
+			best, bestScore = i, shown[i].Score
 		}
 	}
 	return best

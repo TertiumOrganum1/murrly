@@ -2,23 +2,23 @@ package multiinfer
 
 import (
 	"strings"
-	"unicode"
+
+	"github.com/tertiumorganum1/murrly/internal/crossjudge"
 )
 
-// ScoreMode selects how a candidate's rank is computed. The combined
-// default mixes Whisper's confidence with our text-shape heuristic; the
-// two single-signal modes exist because either one alone can pick a
-// better variant depending on the audio, and the user wanted to compare
-// them live from the tray menu rather than guess at fixed weights.
+// ScoreMode selects WHICH metric ranks the variants and picks the one to
+// insert. There is no hidden third metric: the only two signals are the ones
+// the picker shows — the model's own confidence (1st number) and our
+// 7-criteria cross score (2nd number). The menu choice is the principle from
+// selection all the way to the ★/✓ marks.
 type ScoreMode int
 
 const (
-	// ScoreCombined — 0.5*confidence + 0.5*heuristic (the original blend).
+	// ScoreCombined — model confidence + our cross score.
 	ScoreCombined ScoreMode = iota
-	// ScoreConfidence — Whisper's mean per-token probability only.
+	// ScoreConfidence — the model's mean per-token probability only.
 	ScoreConfidence
-	// ScoreHeuristic — the text-shape heuristic only (length, punctuation,
-	// capitalization, Latin-term preservation).
+	// ScoreHeuristic — our 7-criteria cross score only ("только наша метрика").
 	ScoreHeuristic
 )
 
@@ -28,7 +28,7 @@ func ParseScoreMode(s string) ScoreMode {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "confidence", "whisper", "probability":
 		return ScoreConfidence
-	case "heuristic", "empirical", "text":
+	case "heuristic", "empirical", "text", "ours", "cross":
 		return ScoreHeuristic
 	default:
 		return ScoreCombined
@@ -48,94 +48,23 @@ func (m ScoreMode) String() string {
 	}
 }
 
-// score ranks a candidate in [0,1] under the chosen mode. Confidence
-// alone is a weak signal (Whisper is often confidently wrong on fast-mode
-// mush); the heuristic catches the failure shapes the user actually sees
-// — junk-short output, fast-mode (no punctuation / no capitals), and
-// technical terms rendered in Cyrillic instead of Latin. The combined
-// mode averages the two; the single-signal modes let the user pick when
-// the blend misbehaves.
+// crossNormDivisor maps our raw cross score into ~[0,1] for the combined
+// blend (clean Russian lands ~0.3–0.5; latin terms / punctuation push higher).
+const crossNormDivisor = 3.0
+
+// score ranks a candidate under the chosen mode, using exactly the two
+// metrics surfaced in the picker — confidence (1st number) and our cross
+// score (2nd number). ScoreHeuristic returns the raw cross score (only the
+// ordering matters); the others stay in [0,1].
 func score(text string, confidence float64, mode ScoreMode) float64 {
 	switch mode {
 	case ScoreConfidence:
 		return clamp01(confidence)
 	case ScoreHeuristic:
-		return heuristic(text)
+		return crossjudge.Score(text, "")
 	default:
-		return clamp01(0.5*clamp01(confidence) + 0.5*heuristic(text))
+		return 0.5*clamp01(confidence) + 0.5*clamp01(crossjudge.Score(text, "")/crossNormDivisor)
 	}
-}
-
-// heuristic scores text quality in [0,1] from its shape alone.
-func heuristic(text string) float64 {
-	text = strings.TrimSpace(text)
-	words := strings.Fields(text)
-	if len(words) < 3 {
-		// Too short to be a real dictation result — almost certainly a
-		// dropped/garbled decode. Floor it so any fuller candidate wins.
-		return 0.1
-	}
-
-	s := 0.5 // base
-
-	punct := hasSentencePunct(text)
-	upper := hasUppercase(text)
-
-	// Fast-mode: a long run with neither sentence punctuation nor any
-	// capital letter is Whisper's degraded output. Strong penalty.
-	if len(words) >= 15 && !punct && !upper {
-		s -= 0.4
-	}
-
-	// Formatting bonuses — present punctuation and capitalization both
-	// signal a clean decode.
-	if punct {
-		s += 0.15
-	}
-	if upper {
-		s += 0.15
-	}
-
-	// Latin presence: dictation here is Russian with embedded English
-	// technical terms (React, Docker, …). A candidate that preserved
-	// those in Latin scores higher than one that Cyrillicized them.
-	// Scaled by the Latin share of all letters, capped at +0.2.
-	s += 0.2 * latinRatio(text)
-
-	return clamp01(s)
-}
-
-func hasSentencePunct(text string) bool {
-	return strings.ContainsAny(text, ".!?")
-}
-
-func hasUppercase(text string) bool {
-	for _, r := range text {
-		if unicode.IsUpper(r) {
-			return true
-		}
-	}
-	return false
-}
-
-// latinRatio returns the fraction of letters that are Latin-script,
-// over all letters (Latin + Cyrillic + others). 0 for pure Russian
-// (no penalty — just no bonus), higher when English terms survived.
-func latinRatio(text string) float64 {
-	var latin, letters int
-	for _, r := range text {
-		if !unicode.IsLetter(r) {
-			continue
-		}
-		letters++
-		if unicode.Is(unicode.Latin, r) {
-			latin++
-		}
-	}
-	if letters == 0 {
-		return 0
-	}
-	return float64(latin) / float64(letters)
 }
 
 func clamp01(v float64) float64 {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/tertiumorganum1/murrly/internal/app"
 	"github.com/tertiumorganum1/murrly/internal/config"
+	"github.com/tertiumorganum1/murrly/internal/crossjudge"
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
 	"github.com/tertiumorganum1/murrly/internal/menuactions"
 	"github.com/tertiumorganum1/murrly/internal/nemotron"
@@ -68,9 +69,10 @@ func (m *engineManager) Run(pcm []float32, leadOffsetSec float64, multi bool) []
 		out = append(out, app.Variant{
 			Text:  formatted,
 			Model: app.ModelNemotron,
-			// Score the RAW text so the heuristics discriminate the cleanest
-			// variant before formatting adds a uniform capital + period.
-			Score:      nemotron.HybridScore(c.Text, c.Score),
+			// Rank by OUR cross score (Nemotron exposes no usable confidence),
+			// scored on the same formatted text the picker shows as the 2nd
+			// number — so the ★/insert and the displayed score agree.
+			Score:      crossjudge.Score(formatted, ""),
 			Confidence: c.Score,
 		})
 	}
