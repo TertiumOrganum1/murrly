@@ -292,6 +292,33 @@ func (a *App) kickNemotronBackground(pcm []float32, leadOffsetSec float64) {
 	}()
 }
 
+// kickWhisperBackground mirrors kickNemotronBackground for the Break path:
+// Break inserts the Nemotron result immediately, and Whisper runs in the
+// BACKGROUND so its variants still surface in the Ctrl+F11 picker. Multi mode
+// → the full variant batch; single pass → one variant. Appended only if the
+// generation still matches (no newer recording/reprocess has started).
+func (a *App) kickWhisperBackground(pcm []float32, leadOffsetSec float64) {
+	gen := a.curGen()
+	multi := a.multiActive()
+	go func() {
+		var vs []Variant
+		switch {
+		case multi:
+			vs = a.cfg.MultiTranscriber.Run(pcm, leadOffsetSec)
+		case a.cfg.Transcriber != nil:
+			if text, err := a.cfg.Transcriber.Transcribe(pcm); err == nil && text != "" {
+				vs = []Variant{{Text: text, Model: ModelWhisper}}
+			}
+		}
+		if len(vs) == 0 {
+			return
+		}
+		if a.appendVariantsGen(gen, vs) {
+			log.Printf("whisper (background): +%d variants in picker", len(vs))
+		}
+	}()
+}
+
 const (
 	// pcmSampleRateHz mirrors the recorder's fixed sample rate;
 	// duplicated here so the App can compute audio lengths and
@@ -445,6 +472,7 @@ func (a *App) finish() {
 	// the fast Whisper insert.
 	if pref && a.cfg.Nemotron != nil {
 		a.runNemotron(pcm, 0, "recording")
+		a.kickWhisperBackground(pcm, 0) // mirror of F12: the other engine fills the picker in the background
 		return
 	}
 
@@ -479,37 +507,46 @@ func (a *App) reprocess() {
 		return
 	}
 
+	// Fresh batch ("свежие 8"): clear the cache so Ctrl+F11 shows exactly this
+	// round's variants. The generation bump also rejects any background kick
+	// still running from the previous round.
+	a.resetVariants()
+	a.multiRound++
+
+	// Ctrl+Break: insert the Nemotron best, run Whisper in the background.
 	if pref && a.cfg.Nemotron != nil {
-		a.multiRound++
 		offset := float64(a.multiRound*a.cfg.Nemotron.Count()) * multiReprocessStepSec
 		a.runNemotron(a.lastPCM, offset, fmt.Sprintf("reprocess #%d", a.multiRound))
+		a.kickWhisperBackground(a.lastPCM, offset)
 		return
 	}
 
+	// Ctrl+F12: insert the Whisper best, run Nemotron in the background. Both
+	// engines get the same advancing leading-silence offset so the new batch
+	// lands on fresh chunk alignments instead of repeating the previous one.
 	if a.multiActive() {
-		// New batch of variants. Continue the leading-silence offset
-		// past everything already explored so this batch lands on fresh
-		// chunk alignments instead of repeating the first four.
-		a.multiRound++
 		offset := float64(a.multiRound*a.cfg.MultiTranscriber.Count()) * multiReprocessStepSec
 		a.runMulti(a.lastPCM, offset, fmt.Sprintf("reprocess #%d", a.multiRound))
-	} else {
-		a.reprocessAttempts++
-		startPad := reprocessSilencePadSec * float64(a.reprocessAttempts)
-		endPad := 0.0
-		if a.padSilence.Load() {
-			startPad += baselineSilencePadStartSec
-			endPad = baselineSilencePadEndSec
+		if a.cfg.Nemotron != nil {
+			a.kickNemotronBackground(a.lastPCM, offset)
 		}
-		padded := padPCM(a.lastPCM, startPad, endPad)
-		origSec := float64(len(a.lastPCM)) / float64(pcmSampleRateHz)
-		log.Printf("reprocess: attempt #%d, re-running last %.2fs of audio with %.1fs leading, %.1fs trailing silence", a.reprocessAttempts, origSec, startPad, endPad)
-		a.transcribeAndPaste(padded)
+		return
 	}
-	// Ctrl+F12 also refreshes Nemotron in the background, so Ctrl+F11 after
-	// a reprocess still surfaces Nemotron's take alongside Whisper's.
+
+	// Single-pass Whisper (multi off): stack leading silence per attempt.
+	a.reprocessAttempts++
+	startPad := reprocessSilencePadSec * float64(a.reprocessAttempts)
+	endPad := 0.0
+	if a.padSilence.Load() {
+		startPad += baselineSilencePadStartSec
+		endPad = baselineSilencePadEndSec
+	}
+	padded := padPCM(a.lastPCM, startPad, endPad)
+	origSec := float64(len(a.lastPCM)) / float64(pcmSampleRateHz)
+	log.Printf("reprocess: attempt #%d, re-running last %.2fs of audio with %.1fs leading, %.1fs trailing silence", a.reprocessAttempts, origSec, startPad, endPad)
+	a.transcribeAndPaste(padded)
 	if a.cfg.Nemotron != nil {
-		a.kickNemotronBackground(a.lastPCM, 0)
+		a.kickNemotronBackground(a.lastPCM, startPad)
 	}
 }
 

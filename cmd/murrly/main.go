@@ -672,7 +672,12 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		}
 		return va.Score > vb.Score
 	})
-	winner := crossWinnerIndex(shown) // best-Whisper vs best-Nemotron, ★
+	// ★ marks the best variant by our 7-criteria score within EACH engine
+	// group — so both the best Whisper and the best Nemotron get a star
+	// (Nemotron has no usable internal score, so our criterion is the only
+	// "best" signal it has).
+	bestW := bestCrossInGroup(shown, false)
+	bestN := bestCrossInGroup(shown, true)
 	opts := make([]string, len(order))
 	for d, si := range order {
 		v := shown[si]
@@ -680,8 +685,8 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		if v.Inserted {
 			mark += "✓" // what was actually inserted
 		}
-		if si == winner {
-			mark += "★" // the cross-engine ranker's pick of the two bests
+		if si == bestW || si == bestN {
+			mark += "★" // best by our 7-criteria score in this engine's group
 		}
 		if mark != "" {
 			mark += " "
@@ -717,34 +722,25 @@ func groupRank(model string) int {
 	return 0
 }
 
-// crossWinnerIndex picks which of the two engines' BEST variants reads
-// cleaner, for the ★ hint. Both are compared through the same Whisper
-// post-processing filter (Whisper text is already filtered; the Nemotron
-// text is run through it here, intermediate-only) so the comparison is fair.
-// Returns the index into shown of the winning variant, or -1 if empty.
-func crossWinnerIndex(shown []app.Variant) int {
-	bw, bn := -1, -1
+// bestCrossInGroup returns the index into shown of the variant with the
+// highest 7-criteria cross score within one engine group (nemotron=true →
+// Nemotron variants, false → Whisper and any untagged). -1 if the group is
+// empty. ★ marks this per group, so each engine's best is starred — for
+// Nemotron our criterion is the only "best" signal, since it exposes no
+// usable internal confidence.
+func bestCrossInGroup(shown []app.Variant, nemotron bool) int {
+	best := -1
+	var bestScore float64
 	for i := range shown {
-		if shown[i].Model == app.ModelNemotron {
-			if bn < 0 || shown[i].Score > shown[bn].Score {
-				bn = i
-			}
-		} else {
-			if bw < 0 || shown[i].Score > shown[bw].Score {
-				bw = i
-			}
+		if (shown[i].Model == app.ModelNemotron) != nemotron {
+			continue
+		}
+		s := crossjudge.Score(shown[i].Text, "")
+		if best < 0 || s > bestScore {
+			best, bestScore = i, s
 		}
 	}
-	if bw < 0 {
-		return bn
-	}
-	if bn < 0 {
-		return bw
-	}
-	if crossjudge.Better(shown[bw].Text, transcriber.FilterText(shown[bn].Text)) {
-		return bw
-	}
-	return bn
+	return best
 }
 
 // modelGlyph prefixes a per-engine marker so the picker shows which model

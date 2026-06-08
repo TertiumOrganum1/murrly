@@ -21,6 +21,10 @@ import (
 // multi mode (matches the sidecar's leading-silence list).
 const nemoVariants = 4
 
+// nemoSampleRateHz mirrors the recorder/sidecar sample rate, used to convert
+// the reprocess leading-silence offset (seconds) into samples.
+const nemoSampleRateHz = 16000
+
 // engineManager implements app.NemotronEngine: Nemotron-only recognition over
 // the sidecar socket, formatted (cyrillic→latin, capitalisation) and ranked
 // by the hybrid scorer. Whisper is untouched — F12 keeps its own fast path;
@@ -32,6 +36,13 @@ type engineManager struct {
 func (m *engineManager) Count() int { return nemoVariants }
 
 func (m *engineManager) Run(pcm []float32, leadOffsetSec float64, multi bool) []app.Variant {
+	// Honor the reprocess offset: prepend leading silence so a Ctrl+Break /
+	// Ctrl+F12 round shifts the audio onto a fresh alignment and Nemotron
+	// yields different variants instead of repeating the previous batch.
+	if leadOffsetSec > 0 {
+		pad := make([]float32, int(leadOffsetSec*nemoSampleRateHz))
+		pcm = append(pad, pcm...)
+	}
 	n := 1
 	if multi {
 		n = nemoVariants
