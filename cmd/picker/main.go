@@ -38,6 +38,12 @@ const appID = "murrly-picker"
 // has empty space below the last option.
 const windowWidth = 820
 
+// gutterSep splits each option into its fixed-width left gutter (marks +
+// glyph on line 1, scores on line 2) and the reply text. The parent
+// (cmd/murrly) joins them with this; the picker reserves a uniform gutter
+// width so every card's text starts at the same x.
+const gutterSep = "\x1f"
+
 // catIcon is Murrly's cat-head mark, shown as the window/taskbar icon so
 // the picker reads as part of Murrly rather than a stray Fyne window.
 //
@@ -144,14 +150,36 @@ func newPickerWindow(a fyne.App, options []string) fyne.Window {
 	// pre-broken with newlines and never re-wraps.
 	textSize := theme.TextSize()
 	style := fyne.TextStyle{}
-	availWidth := float32(windowWidth) - 60
 
-	cards := make([]fyne.CanvasObject, 0, len(options))
-	for i, opt := range options {
+	// Each option is "gutter\x1ftext". The gutter (marks + glyph on line 1,
+	// scores on line 2) gets a uniform width across all cards, so every card's
+	// reply text begins at the same x. Width = the widest gutter line + slack.
+	type parsedOpt struct{ gutter, text string }
+	parsed := make([]parsedOpt, len(options))
+	var gutterWidth float32
+	for i, o := range options {
+		g, t, found := strings.Cut(o, gutterSep)
+		if !found {
+			g, t = "", o
+		}
+		parsed[i] = parsedOpt{gutter: g, text: t}
+		for _, line := range strings.Split(g, "\n") {
+			if wdt := fyne.MeasureText(line, textSize, style).Width; wdt > gutterWidth {
+				gutterWidth = wdt
+			}
+		}
+	}
+	gutterWidth += 12 // breathing room so the gutter never abuts the text
+
+	// Text column = window minus outer/card paddings minus the gutter.
+	availWidth := float32(windowWidth) - 60 - gutterWidth
+
+	cards := make([]fyne.CanvasObject, 0, len(parsed))
+	for i, p := range parsed {
 		// Wrap to ALL lines (not truncated): the card shows a maxCardLines
 		// window and the mouse wheel scrolls the rest when the card is hovered.
-		lines := wrapWords(oneLine(opt), availWidth, textSize, style)
-		cards = append(cards, newCard(i, lines, maxCardLines, func(idx int) {
+		lines := wrapWords(oneLine(p.text), availWidth, textSize, style)
+		cards = append(cards, newCard(i, p.gutter, gutterWidth, lines, maxCardLines, func(idx int) {
 			fmt.Println(idx)
 			w.Close()
 		}))
@@ -267,18 +295,20 @@ var (
 // mouse wheel scrolls that window so long variants can be read in full.
 type card struct {
 	widget.BaseWidget
-	index   int
-	lines   []string // full wrapped text, one entry per line
-	visible int      // lines shown at once (window height)
-	offset  int      // index of the first visible line
-	onTap   func(int)
+	index       int
+	gutter      string   // fixed-width left column: marks + glyph / scores
+	gutterWidth float32  // uniform across cards, so text starts at one x
+	lines       []string // full wrapped reply text, one entry per line
+	visible     int      // lines shown at once (window height)
+	offset      int      // index of the first visible line
+	onTap       func(int)
 
-	bg    *canvas.Rectangle
-	label *widget.Label
+	bg        *canvas.Rectangle
+	textLabel *widget.Label
 }
 
-func newCard(index int, lines []string, visible int, onTap func(int)) *card {
-	c := &card{index: index, lines: lines, visible: visible, onTap: onTap}
+func newCard(index int, gutter string, gutterWidth float32, lines []string, visible int, onTap func(int)) *card {
+	c := &card{index: index, gutter: gutter, gutterWidth: gutterWidth, lines: lines, visible: visible, onTap: onTap}
 	c.ExtendBaseWidget(c)
 	return c
 }
@@ -309,9 +339,21 @@ func (c *card) maxOffset() int {
 func (c *card) CreateRenderer() fyne.WidgetRenderer {
 	c.bg = canvas.NewRectangle(cardRest)
 	c.bg.CornerRadius = 6
-	c.label = widget.NewLabel(c.view())
-	c.label.Wrapping = fyne.TextWrapOff // pre-wrapped to fixed-width lines
-	padded := container.NewPadded(c.label)
+
+	// Left gutter: marks/glyph + scores, in a cell forced to gutterWidth via a
+	// transparent spacer so every card's text column starts at the same x. The
+	// VBox top-anchors the (2-line) gutter against taller text cards.
+	gutterLabel := widget.NewLabel(c.gutter)
+	gutterLabel.Wrapping = fyne.TextWrapOff
+	spacer := canvas.NewRectangle(color.Transparent)
+	spacer.SetMinSize(fyne.NewSize(c.gutterWidth, 0))
+	gutterCell := container.NewStack(spacer, container.NewVBox(gutterLabel))
+
+	c.textLabel = widget.NewLabel(c.view())
+	c.textLabel.Wrapping = fyne.TextWrapOff // pre-wrapped to fixed-width lines
+
+	row := container.NewBorder(nil, nil, gutterCell, nil, c.textLabel)
+	padded := container.NewPadded(row)
 	return &cardRenderer{card: c, objects: []fyne.CanvasObject{c.bg, padded}, content: padded}
 }
 
@@ -339,8 +381,8 @@ func (c *card) Scrolled(ev *fyne.ScrollEvent) {
 	if c.offset > mo {
 		c.offset = mo
 	}
-	if c.label != nil {
-		c.label.SetText(c.view())
+	if c.textLabel != nil {
+		c.textLabel.SetText(c.view())
 	}
 }
 

@@ -681,30 +681,32 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 	opts := make([]string, len(order))
 	for d, si := range order {
 		v := shown[si]
-		mark := ""
+		marks := ""
 		if v.Inserted {
-			mark += "✓" // what was actually inserted
+			marks += "✓" // what was actually inserted
 		}
 		if si == bestW || si == bestN {
-			mark += "★" // best by our 7-criteria score in this engine's group
-		}
-		if mark != "" {
-			mark += " "
+			marks += "★" // best by the chosen metric in this engine's group
 		}
 		// "<internal>/<our>": internal = model-native confidence, our = the
 		// 7-criteria cross score. Whisper exposes a real mean-token
-		// probability ∈[0,1]; Nemotron's RNNT path exposes no usable
-		// confidence (raw score isn't a probability and NeMo's token
-		// confidence is empty in streaming), so we show "—" rather than a
-		// fake number. The scoreMode menu affects only insertion, not display.
+		// probability ∈[0,1]; Nemotron's RNNT path exposes none, so we show
+		// "—" rather than a fake number.
 		internal := "—"
 		if v.Model != app.ModelNemotron {
 			internal = fmt.Sprintf("%.2f", v.Confidence)
 		}
-		// Score on the ORIGINAL text; censor only what is shown (toggle-gated,
-		// no-op when off) so the picker never displays mat while the ranking
-		// still reflects the real recognition.
-		opts[d] = fmt.Sprintf("%s%s%s/%.2f  %s", mark, modelGlyph(v.Model), internal, crossjudge.Score(v.Text, ""), variantPreview(ruprofane.Filter(v.Text)))
+		// Left gutter (fixed-width in the picker): line 1 = marks + engine
+		// glyph, line 2 = the two scores. The reply text is sent after a \x1f
+		// separator so the picker can align every card's text to one x.
+		// Score on the ORIGINAL text; censor only what is shown (toggle-gated).
+		glyph := strings.TrimSpace(modelGlyph(v.Model))
+		top := glyph
+		if marks != "" {
+			top = marks + " " + glyph
+		}
+		gutter := fmt.Sprintf("%s\n%s/%.2f", top, internal, crossjudge.Score(v.Text, ""))
+		opts[d] = gutter + "\x1f" + variantPreview(ruprofane.Filter(v.Text))
 	}
 	d, ok := picker.Pick("", opts)
 	if !ok || d < 0 || d >= len(order) {
