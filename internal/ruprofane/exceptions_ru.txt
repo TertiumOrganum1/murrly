@@ -1,0 +1,9 @@
+# Sentence-context exceptions for the hard-mat filter (stems, ё→е, lowercased).
+# A word whose folded form CONTAINS any stem below is NEVER masked.
+# With root-based matching only these few clean words collide with a mat root.
+# Add your own — one stem per line; trailing "# ..." comments are ignored.
+
+команд      # манда → команда / командир / командный / командование
+мандар      # манда → мандарин
+мандат      # манда → мандат
+страх       # хуй → страхуй / застрахуй / подстрахуй / страховка

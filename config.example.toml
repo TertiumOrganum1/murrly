@@ -36,5 +36,5 @@ paste_delay_ms = 80
 restore_primary = true
 # Mask Russian obscene words (мат) with "•" at display and insertion only;
 # the recognized text is always stored/scored uncensored. Toggle live from
-# the tray ("Фильтр мата"). Opt-in.
-profanity_filter = false
+# the tray ("Фильтр мата"). On by default.
+profanity_filter = true

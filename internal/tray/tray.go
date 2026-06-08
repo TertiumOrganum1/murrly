@@ -9,6 +9,7 @@ import (
 	"fyne.io/systray"
 
 	"github.com/tertiumorganum1/murrly/internal/menuactions"
+	"github.com/tertiumorganum1/murrly/internal/ruprofane"
 )
 
 type State int
@@ -292,6 +293,9 @@ func (t *Tray) onReady() {
 		}()
 	}
 
+	// Cache the latest recent-phrase list so toggling the profanity filter
+	// can re-render those menu titles immediately under the new state.
+	var lastTranscripts []string
 	go func() {
 		for {
 			select {
@@ -301,6 +305,7 @@ func (t *Tray) onReady() {
 				}
 				systray.SetTooltip("Murrly: " + stateName(s))
 			case items := <-t.transcriptCh:
+				lastTranscripts = items
 				updateTranscriptMenuItems(copyItems, items)
 			case idx := <-t.activeModelCh:
 				for i, item := range modelItems {
@@ -363,6 +368,8 @@ func (t *Tray) onReady() {
 					} else {
 						profanityItem.Uncheck()
 					}
+					// Re-censor (or restore) the recent-phrase titles at once.
+					updateTranscriptMenuItems(copyItems, lastTranscripts)
 				}
 			case <-quitItem.ClickedCh:
 				if t.actions.OnQuit != nil {
@@ -402,7 +409,9 @@ func updateTranscriptMenuItems(menuItems []*systray.MenuItem, transcripts []stri
 		if i < len(transcripts) {
 			text = transcripts[i]
 		}
-		item.SetTitle(transcriptMenuTitle(i, text))
+		// Censor only the displayed title (toggle-gated, no-op when off);
+		// enable/disable still keys off the real (uncensored) emptiness.
+		item.SetTitle(transcriptMenuTitle(i, ruprofane.Filter(text)))
 		if text == "" {
 			item.Disable()
 		} else {

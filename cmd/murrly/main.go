@@ -185,7 +185,9 @@ func main() {
 			if !ok {
 				return
 			}
-			if err := cb.Set(text); err != nil {
+			// History keeps the uncensored original; censor on the way out
+			// when the filter is on (no-op when off), matching insertion.
+			if err := cb.Set(ruprofane.Filter(text)); err != nil {
 				log.Printf("copy transcript %d: %v", index, err)
 			}
 		},
