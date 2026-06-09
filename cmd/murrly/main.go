@@ -213,7 +213,14 @@ func main() {
 				log.Printf("reload config: %v", err)
 			}
 		},
-		OnOpenConfig: func() { openConfigFile(cfgPath) },
+		OnOpenConfig: func() { openPath(cfgPath) },
+		OnOpenLog: func() {
+			if p, err := logfile.DefaultPath(logAppName()); err == nil {
+				openPath(p)
+			} else {
+				log.Printf("open log: %v", err)
+			}
+		},
 		OnReprocess: func() {
 			// Non-blocking: if the channel is full (very unusual —
 			// it's buffered to 8 events) we drop the click rather
@@ -545,10 +552,10 @@ func first(snap []string, i int) (string, bool) {
 	return snap[i], true
 }
 
-// openConfigFile opens the config in the user's default text-file handler.
-// macOS: `open path` lets LaunchServices pick the registered .toml handler.
+// openPath opens a file (config or log) in the user's default handler.
+// macOS: `open path` lets LaunchServices pick the registered handler.
 // Linux: `xdg-open` does the same via the freedesktop standard.
-func openConfigFile(path string) {
+func openPath(path string) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "darwin" {
 		cmd = exec.Command("open", path)

@@ -186,6 +186,7 @@ func (t *Tray) onReady() {
 
 	reloadItem := systray.AddMenuItem("Перезагрузить конфиг", "Перечитать config.toml")
 	openCfgItem := systray.AddMenuItem("Открыть конфиг", "Открыть config.toml")
+	openLogItem := systray.AddMenuItem("Открыть лог", "Открыть файл лога Murrly")
 
 	// Permissions submenu — surfaces TCC privacy panes that the brief
 	// AXIsProcessTrustedWithOptions toast otherwise hides before the
@@ -334,6 +335,10 @@ func (t *Tray) onReady() {
 			case <-openCfgItem.ClickedCh:
 				if t.actions.OnOpenConfig != nil {
 					t.actions.OnOpenConfig()
+				}
+			case <-openLogItem.ClickedCh:
+				if t.actions.OnOpenLog != nil {
+					t.actions.OnOpenLog()
 				}
 			case <-copyLatestItem.ClickedCh:
 				t.copyTranscript(0)

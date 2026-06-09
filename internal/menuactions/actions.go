@@ -42,6 +42,8 @@ type Actions struct {
 	// Config helpers.
 	OnReloadConfig func()
 	OnOpenConfig   func()
+	// OnOpenLog opens the app log file in the default handler.
+	OnOpenLog func()
 
 	// Autostart toggle. The callback flips the underlying state and
 	// returns the new value so each renderer can sync its own check
