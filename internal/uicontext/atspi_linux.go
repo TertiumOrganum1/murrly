@@ -286,6 +286,13 @@ func (c *atspiClient) readContext(m ref) (Context, string) {
 	if err != nil {
 		return Context{}, "char-count: " + err.Error()
 	}
+	if c.opaqueRichEditor(m, count) {
+		// The field's real text never reaches the a11y tree — see
+		// opaqueRichEditor. Transforming against the stale placeholder
+		// labels it DOES expose mangles every insert, so bail to the
+		// untouched-passthrough behaviour.
+		return Context{}, "opaque-editor(" + role + ")"
+	}
 	caret, err := c.caretOffset(m)
 	if err != nil {
 		return Context{}, "caret: " + err.Error()
@@ -329,6 +336,55 @@ func (c *atspiClient) readContext(m ref) (Context, string) {
 		out.Following = following
 	}
 	return out, ""
+}
+
+// opaqueRichEditor reports whether the focused editable element hides
+// its real text behind embed placeholders that resolve only to
+// read-only content — the signature of a custom rich editor (the VS
+// Code / Claude Code chat input) that exposes a single U+FFFC and a
+// pinned caret, while the typed text never reaches the accessibility
+// tree at all. Drilling those placeholders yields stale label strings
+// ("Queue another message…", "ctrl esc to focus…"), so any transform
+// built on them is garbage. Verified live 2026-06-10: entry [EDIT]
+// text='￼' caret=(1,1) → section [ro] = placeholder.
+//
+// Conservative by design: a field with any real readable text, or one
+// whose embeds reach an editable text child we could actually read, is
+// NOT opaque and is handled normally.
+func (c *atspiClient) opaqueRichEditor(node ref, count int) bool {
+	if count <= 0 || count > 64 {
+		// Empty field (handled elsewhere) or enough real text that it
+		// can't be a bare placeholder shell.
+		return false
+	}
+	txt, err := c.getText(node, 0, count)
+	if err != nil {
+		return false
+	}
+	embeds := 0
+	for _, r := range txt {
+		switch {
+		case r == embedChar:
+			embeds++
+		case !unicode.IsSpace(r):
+			return false // real, readable text present — trust the field
+		}
+	}
+	if embeds == 0 {
+		return false
+	}
+	// Content is entirely embed placeholders: trustworthy only if one
+	// resolves to an editable text child we could actually read.
+	for i := 0; i < embeds && i < 8; i++ {
+		ch, err := c.childAt(node, i)
+		if err != nil {
+			continue
+		}
+		if c.hasText(ch) && c.isEditable(ch) {
+			return false
+		}
+	}
+	return true
 }
 
 // frame remembers where an embed descent left the parent: embedPos is
