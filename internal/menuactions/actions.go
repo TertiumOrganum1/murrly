@@ -89,12 +89,21 @@ type Actions struct {
 	IsMultiOn     func() bool
 
 	// Nemotron (Linux only). OnRestartNemotron restarts the sidecar service;
-	// when nil the whole Nemotron menu group is omitted (non-Linux, or the
-	// engine disabled). NemotronStatus returns a short live status string
-	// ("готов" / "загружается…" / "не запущен") the tray polls to label a
-	// disabled status line, so the user can see the ~48 s model load.
+	// when nil the whole Nemotron status group is omitted (non-Linux, or the
+	// engine disabled at startup). NemotronStatus returns a short live status
+	// string ("готов" / "загружается…" / "не запущен") the tray polls to label
+	// a disabled status line, so the user can see the ~48 s model load.
 	OnRestartNemotron func()
 	NemotronStatus    func() string
+
+	// Nemotron enable/disable toggle (Linux only). OnToggleNemotron flips the
+	// persisted state, starts/stops the sidecar service (freeing or loading
+	// its GPU model) and returns the new value; the engine itself wires at
+	// startup, so turning it ON takes full effect after a Murrly restart.
+	// IsNemotronOn reports the initial value at render time. Left nil off
+	// Linux, where the engine isn't built, so the renderer omits the toggle.
+	OnToggleNemotron func() bool
+	IsNemotronOn     func() bool
 
 	// macOS Privacy panes (System Settings deep-links). Non-nil only
 	// on darwin; renderers must hide the Permissions submenu when both

@@ -102,8 +102,9 @@ type OutputConfig struct {
 // The model runs in an external Python sidecar served over a Unix socket.
 type NemotronConfig struct {
 	// Enabled wires the Break key to Nemotron and the F12 background fill.
-	// Default true on a fresh config; set false to disable the engine
-	// entirely (Break becomes a no-op). No effect on non-Linux builds.
+	// Default FALSE: the sidecar loads a multi-GB model on the GPU and is
+	// off unless the user opts in via the tray ("Движок Nemotron"). Set
+	// true to wire the engine at startup. No effect on non-Linux builds.
 	Enabled bool `toml:"enabled"`
 	// SocketPath is the sidecar's Unix socket. Empty → /run/user/<uid>/murrly-nemotron.sock.
 	SocketPath string `toml:"socket_path"`
@@ -137,9 +138,10 @@ func defaults() Config {
 			MultiInference:      true,                         // live on/off for the variant batch; toggled from the menu
 			InitialPrompt:       "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
 		},
-		// Nemotron: second engine on the Break key. Enabled by default; the
-		// sidecar must be running (systemd user service) for it to respond.
-		Nemotron: NemotronConfig{Enabled: true, SocketPath: "", Lang: "ru-RU", BoostAlpha: 0.5},
+		// Nemotron: second engine on the Break key. OFF by default — it
+		// loads a multi-GB model on the GPU; opt in via the tray toggle,
+		// which starts the systemd user service and flips this flag.
+		Nemotron: NemotronConfig{Enabled: false, SocketPath: "", Lang: "ru-RU", BoostAlpha: 0.5},
 		// PasteDelayMs sits between Set-clipboard / Cmd-V and the Restore-clipboard
 		// step. Too short and the focused app reads the restored (old) clipboard
 		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip

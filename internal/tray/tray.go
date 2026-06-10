@@ -181,6 +181,15 @@ func (t *Tray) onReady() {
 	profanityChecked := t.actions.IsProfanityOn != nil && t.actions.IsProfanityOn()
 	profanityItem := systray.AddMenuItemCheckbox("Фильтр мата", "Маскировать русский мат символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
 
+	// Nemotron enable/disable (Linux). Off by default — loads a multi-GB GPU
+	// model — so this is a checkbox the user opts into; turning it on starts
+	// the sidecar but the engine wires only on the next Murrly start.
+	var nemoToggleItem *systray.MenuItem
+	if t.actions.OnToggleNemotron != nil {
+		nemoOn := t.actions.IsNemotronOn != nil && t.actions.IsNemotronOn()
+		nemoToggleItem = systray.AddMenuItemCheckbox("Движок Nemotron (Break)", "Второй ASR-движок на клавише Break; грузит модель в GPU. Вступает в силу после перезапуска Murrly", nemoOn)
+	}
+
 	// Context-insert prerequisites (Linux): one self-describing item.
 	// Not yet set up → an actionable "включить…" button; everything in
 	// place → a disabled "настроена ✓" status line. Clicking applies
@@ -296,6 +305,22 @@ func (t *Tray) onReady() {
 				if t.actions.OnSetupContextInsert() {
 					mi.SetTitle(contextInsertTitle(true))
 					mi.Disable()
+				}
+			}
+		}()
+	}
+	// Nemotron enable/disable toggle — flips state + (dis)starts the sidecar
+	// via the callback, re-ticking from the returned value.
+	if nemoToggleItem != nil {
+		mi := nemoToggleItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnToggleNemotron != nil {
+					if t.actions.OnToggleNemotron() {
+						mi.Check()
+					} else {
+						mi.Uncheck()
+					}
 				}
 			}
 		}()

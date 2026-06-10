@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -54,6 +55,12 @@ import (
 func main() {
 	closeLog := setupLogging()
 	defer closeLog()
+
+	// A second Murrly fighting for the same GPU is the usual cause of an
+	// out-of-VRAM abort at model load (which itself can leak a CUDA
+	// context). Terminate any prior instance FIRST and wait for its clean
+	// teardown, so this one loads into the freed memory.
+	terminateOtherInstances()
 
 	setupMetalResources()
 
@@ -431,6 +438,31 @@ func main() {
 	// the engine is disabled.
 	wireNemotronStatus(actions, appCfg.Nemotron)
 
+	// Nemotron enable/disable toggle (Linux). Off by default; turning it on
+	// starts+enables the sidecar service and persists the flag, but the
+	// engine/hotkeys wire at startup, so it takes full effect on the next
+	// Murrly launch (the notification says so). Turning it off stops the
+	// sidecar immediately, freeing its GPU model.
+	if runtime.GOOS == "linux" {
+		actions.IsNemotronOn = func() bool { return cfg.Nemotron.Enabled }
+		actions.OnToggleNemotron = func() bool {
+			newState := !cfg.Nemotron.Enabled
+			if err := setNemotronService(newState); err != nil {
+				log.Printf("nemotron service: %v", err)
+			}
+			if err := persistNemotronEnabled(cfgPath, cfg, newState); err != nil {
+				log.Printf("nemotron persist: %v", err)
+			}
+			cfg.Nemotron.Enabled = newState
+			if newState {
+				desktopNotify("Murrly: Nemotron", "Включён. Заработает после перезапуска Murrly.")
+			} else {
+				desktopNotify("Murrly: Nemotron", "Выключен, модель выгружена из GPU.")
+			}
+			return newState
+		}
+	}
+
 	a = app.New(appCfg)
 
 	hk, err := hotkey.New(cfg.Hotkey.Key)
@@ -580,6 +612,50 @@ func first(snap []string, i int) (string, bool) {
 		return "", false
 	}
 	return snap[i], true
+}
+
+// terminateOtherInstances sends SIGTERM to any other running Murrly process
+// (same executable basename) and waits up to ~3s for each to exit, so its
+// GPU/CUDA context is torn down cleanly before this instance loads its model.
+// SIGTERM, never SIGKILL: a hard kill mid-cudaMalloc is exactly what leaks an
+// unreclaimable context. A wedged instance that ignores SIGTERM is left alone
+// (logged) rather than force-killed.
+func terminateOtherInstances() {
+	self := os.Getpid()
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	name := filepath.Base(exe)
+	out, err := exec.Command("pgrep", "-x", name).Output()
+	if err != nil {
+		return // none found, or pgrep unavailable
+	}
+	var others []int
+	for _, f := range strings.Fields(string(out)) {
+		pid, perr := strconv.Atoi(f)
+		if perr != nil || pid == self {
+			continue
+		}
+		if syscall.Kill(pid, syscall.SIGTERM) == nil {
+			others = append(others, pid)
+		}
+	}
+	if len(others) == 0 {
+		return
+	}
+	log.Printf("startup: SIGTERM to stale Murrly instance(s) %v, waiting for clean exit", others)
+	for _, pid := range others {
+		for i := 0; i < 30; i++ { // up to ~3s per instance
+			if syscall.Kill(pid, 0) != nil {
+				break // gone
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if syscall.Kill(pid, 0) == nil {
+			log.Printf("startup: instance %d still alive after SIGTERM — proceeding anyway", pid)
+		}
+	}
 }
 
 // desktopNotify shows a transient desktop notification. Best-effort: any

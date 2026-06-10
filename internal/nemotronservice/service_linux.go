@@ -23,3 +23,15 @@ func Restart() error {
 func IsActive() bool {
 	return exec.Command("systemctl", "--user", "is-active", "--quiet", Unit).Run() == nil
 }
+
+// Enable starts the sidecar now and marks it for autostart at login.
+// Driven by the tray "Движок Nemotron" toggle when the user opts in.
+func Enable() error {
+	return exec.Command("systemctl", "--user", "enable", "--now", Unit).Run()
+}
+
+// Disable stops the sidecar now and removes it from autostart, freeing its
+// GPU memory. Driven by the same toggle when the user opts out (the default).
+func Disable() error {
+	return exec.Command("systemctl", "--user", "disable", "--now", Unit).Run()
+}

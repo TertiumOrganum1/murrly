@@ -25,8 +25,11 @@ frontend, backend, service mesh.
 # F12 остаётся на Whisper и вставляет мгновенно; Nemotron при F12
 # считает в фоне, его варианты появляются в Ctrl+F11. Break вставляет
 # результат Nemotron.
+# ВЫКЛ по умолчанию: сайдкар грузит многогигабайтную модель на GPU.
+# Включается из трея («Движок Nemotron»), который стартует службу и
+# выставляет этот флаг; вступает в силу после перезапуска Murrly.
 [nemotron]
-enabled = true
+enabled = false
 socket_path = ""          # пусто → /run/user/<uid>/murrly-nemotron.sock
 lang = "ru-RU"
 boost_alpha = 0.5         # вес биасинга терминов (0 = выкл; >0.5 портит обычную речь)

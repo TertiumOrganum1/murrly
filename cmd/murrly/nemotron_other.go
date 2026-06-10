@@ -17,3 +17,6 @@ func setupNemotron(events chan app.Event, ncfg config.NemotronConfig) app.Nemotr
 
 // wireNemotronStatus is a no-op off Linux (no Nemotron menu group).
 func wireNemotronStatus(actions *menuactions.Actions, eng app.NemotronEngine) {}
+
+// setNemotronService is a no-op off Linux (no sidecar service there).
+func setNemotronService(on bool) error { return nil }

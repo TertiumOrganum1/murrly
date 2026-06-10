@@ -161,6 +161,16 @@ func wireNemotronStatus(actions *menuactions.Actions, eng app.NemotronEngine) {
 	}
 }
 
+// setNemotronService starts+enables (on) or stops+disables (off) the sidecar
+// systemd user service. Wired to the tray's "Движок Nemotron" toggle so the
+// user can free the GPU model or bring it back without touching systemctl.
+func setNemotronService(on bool) error {
+	if on {
+		return nemotronservice.Enable()
+	}
+	return nemotronservice.Disable()
+}
+
 // trySend posts an event without blocking — drops it if the buffer is full
 // (the user can just press again), matching the other hotkey pumps.
 func trySend(events chan app.Event, ev app.Event) {
