@@ -120,9 +120,17 @@ func (t *Tray) onReady() {
 	}
 
 	// "Reprocess last" — re-runs the most recent recording through
-	// Whisper with a small silence prefix. Cheap manual retry when
+	// the engines with a small silence prefix. Cheap manual retry when
 	// the first decode dropped punctuation or otherwise looks bad.
-	reprocessItem := systray.AddMenuItem("Перепроцессить последнее", "Прогнать последнюю запись через Whisper ещё раз (со сдвигом окна)")
+	// The hotkey lives in the title — the menu doubles as the help.
+	reprocessItem := systray.AddMenuItem("Распознать ещё раз (Ctrl+F12)", "Прогнать последнюю запись через движки ещё раз (со сдвигом окна); Ctrl+Break — вставить вариант Nemotron")
+
+	// Menu twin of the Ctrl+F11 picker hotkey, doubling as its help.
+	// Hidden when no picker is wired (single-pass mode).
+	var variantsItem *systray.MenuItem
+	if t.actions.OnPickVariants != nil {
+		variantsItem = systray.AddMenuItem("Варианты распознавания (Ctrl+F11)", "Показать варианты последнего распознавания и вставить выбранный")
+	}
 
 	// Model picker. Cinnamon/AppIndicator renders NESTED submenus
 	// unreliably — they collapse to an empty little square (the bug the
@@ -172,6 +180,19 @@ func (t *Tray) onReady() {
 
 	profanityChecked := t.actions.IsProfanityOn != nil && t.actions.IsProfanityOn()
 	profanityItem := systray.AddMenuItemCheckbox("Фильтр мата", "Маскировать русский мат символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
+
+	// Context-insert prerequisites (Linux): one self-describing item.
+	// Not yet set up → an actionable "включить…" button; everything in
+	// place → a disabled "настроена ✓" status line. Clicking applies
+	// the system + VS Code settings via the wired callback.
+	var ctxInsertItem *systray.MenuItem
+	if t.actions.OnSetupContextInsert != nil {
+		ready := t.actions.IsContextInsertReady != nil && t.actions.IsContextInsertReady()
+		ctxInsertItem = systray.AddMenuItem(contextInsertTitle(ready), "Читать текст вокруг курсора при вставке и подгонять регистр, пробелы и точку")
+		if ready {
+			ctxInsertItem.Disable()
+		}
+	}
 
 	// Nemotron group (Linux only — shown when the restart callback is wired).
 	// A disabled status line shows the ~48 s model load; a restart item
@@ -247,6 +268,34 @@ func (t *Tray) onReady() {
 			for range mi.ClickedCh {
 				if t.actions.OnPickScoringMode != nil {
 					t.actions.OnPickScoringMode(idx)
+				}
+			}
+		}()
+	}
+	// "Варианты распознавания" — fires the same event path as the
+	// Ctrl+F11 hotkey. Conditional item → its own goroutine.
+	if variantsItem != nil {
+		mi := variantsItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnPickVariants != nil {
+					t.actions.OnPickVariants()
+				}
+			}
+		}()
+	}
+	// Context-insert setup — applies the missing settings and, once
+	// everything is in place, turns itself into a disabled status line.
+	if ctxInsertItem != nil {
+		mi := ctxInsertItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnSetupContextInsert == nil {
+					continue
+				}
+				if t.actions.OnSetupContextInsert() {
+					mi.SetTitle(contextInsertTitle(true))
+					mi.Disable()
 				}
 			}
 		}()
@@ -394,6 +443,15 @@ func (t *Tray) copyTranscript(index int) {
 }
 
 func (t *Tray) onExit() {}
+
+// contextInsertTitle renders the context-insert item for the two
+// states it can be in: an actionable setup button or a done-marker.
+func contextInsertTitle(ready bool) string {
+	if ready {
+		return "Контекстная вставка: настроена ✓"
+	}
+	return "Контекстная вставка: включить…"
+}
 
 func stateName(s State) string {
 	switch s {

@@ -5,81 +5,125 @@ import (
 	"unicode"
 )
 
+// sentenceEnders are the characters after which a fresh sentence
+// starts: the new text keeps its capital and its own terminator.
+const sentenceEnders = ".!?…"
+
+// midConnectors join clauses: inserting after one means we're inside a
+// sentence — lower-case the first letter and drop our terminator.
+const midConnectors = ",;:"
+
+// tailMode says what happens to the end of the inserted text.
+type tailMode int
+
+const (
+	// tailNone — leave the tail exactly as the pipeline produced it.
+	tailNone tailMode = iota
+	// tailKeep — sentence boundary: the terminator stays, but the
+	// trailing blank is dropped when the field already provides one
+	// (or nothing follows at all).
+	tailKeep
+	// tailStrip — mid-sentence insertion: strip ALL trailing
+	// punctuation ("." / "..." / "…" / "!" / "?" / combinations) plus
+	// blanks, then re-add a single space only if a word follows
+	// immediately.
+	tailStrip
+)
+
 // Apply rewrites the recognised text to fit the cursor's surroundings.
 // Pure function — depends only on text and ctx, no IO. When
 // ctx.HasContext is false the text is returned untouched (we couldn't
 // read the focus, so don't guess).
 //
-// Rules, based on the character immediately to the left of the cursor:
+// Left side (what's before the insertion point) decides the head:
 //
-//	at start of doc          → capitalise first letter
-//	`.` / `!` / `?`          → capitalise first letter, prepend " "
-//	letter / digit           → lower-case first letter, prepend " ",
-//	                           strip a trailing ". " (we're inserting
-//	                           mid-sentence, a terminator would chop it)
-//	`,` / `;` / `:`          → lower-case first letter, prepend " ",
-//	                           strip trailing ". "
-//	whitespace               → leave alone — could be either between
-//	                           sentences or just after a comma; without
-//	                           looking further back we can't decide,
-//	                           so we don't risk a bad transform
-//	anything else            → leave alone
+//	nothing / line start       → capitalise, no leading space
+//	`.` `!` `?` `…`            → capitalise, leading space unless one
+//	                             is already there
+//	letter / digit / `,;:`     → lower-case, leading space unless
+//	                             already there, mid-sentence tail
+//	raw space (macOS capture)  → ambiguous — leave alone
+//	anything else              → leave alone
+//
+// Right side (what's after the insertion point) decides the tail —
+// see tailMode. The guiding rule, per the dictation UX: when slipping
+// a phrase into the middle of a sentence exactly one space must
+// separate it from the next word, counting any space that was already
+// there; sentence-final punctuation of the inserted phrase disappears
+// because the sentence it lands in already has its own.
 //
 // "Capitalise" only flips Lower → Upper; if the first letter is
-// already upper or non-letter, nothing happens. Same for the inverse.
-// Whisper's filter pipeline already gets first-letter casing right in
-// most cases — Apply only corrects the edge cases where the cursor
-// context disagrees with the standalone-sentence assumption.
+// already upper or non-letter, nothing happens. Same for the inverse
+// (proper names at the start of a mid-sentence insert do get
+// lower-cased — we can't tell a name from a sentence-start capital
+// without a dictionary, an accepted limitation).
 func Apply(text string, ctx Context) string {
 	if !ctx.HasContext || text == "" {
 		return text
 	}
 	runes := []rune(text)
-	if len(runes) == 0 {
+
+	capitalize := false
+	lowercase := false
+	leadSpace := false
+	tail := tailNone
+
+	switch {
+	case ctx.AtStart, ctx.Preceding == '\n':
+		capitalize = true
+		tail = tailKeep
+	case strings.ContainsRune(sentenceEnders, ctx.Preceding):
+		capitalize = true
+		leadSpace = !ctx.SpaceBefore
+		tail = tailKeep
+	case unicode.IsLetter(ctx.Preceding) || unicode.IsDigit(ctx.Preceding):
+		lowercase = true
+		leadSpace = !ctx.SpaceBefore
+		tail = tailStrip
+	case strings.ContainsRune(midConnectors, ctx.Preceding):
+		lowercase = true
+		leadSpace = !ctx.SpaceBefore
+		tail = tailStrip
+	case unicode.IsSpace(ctx.Preceding):
+		// macOS legacy: a raw blank to the left and nothing known
+		// beyond it — could be between sentences or after a comma.
+		// Don't risk a bad transform.
+		return text
+	default:
+		// Brackets, quotes, emoji, dashes… — no safe guess.
 		return text
 	}
 
-	addLeadingSpace := false
-	capitalise := false
-	lowercase := false
-	stripTerminator := false
-
-	switch {
-	case ctx.AtStart:
-		capitalise = true
-	case ctx.Preceding == '.' || ctx.Preceding == '!' || ctx.Preceding == '?':
-		capitalise = true
-		addLeadingSpace = true
-	case unicode.IsSpace(ctx.Preceding):
-		// Ambiguous — leave casing alone, no leading space needed.
-	case unicode.IsLetter(ctx.Preceding) || unicode.IsDigit(ctx.Preceding):
-		lowercase = true
-		addLeadingSpace = true
-		stripTerminator = true
-	case ctx.Preceding == ',' || ctx.Preceding == ';' || ctx.Preceding == ':':
-		lowercase = true
-		addLeadingSpace = true
-		stripTerminator = true
-	}
-
-	if capitalise && unicode.IsLower(runes[0]) {
+	if capitalize && unicode.IsLower(runes[0]) {
 		runes[0] = unicode.ToUpper(runes[0])
 	}
 	if lowercase && unicode.IsUpper(runes[0]) {
 		runes[0] = unicode.ToLower(runes[0])
 	}
-	result := string(runes)
+	out := string(runes)
 
-	if stripTerminator {
-		// finalizeTerminalPunctuation in the transcriber pipeline
-		// always appends ". " at the end; mid-sentence insertion
-		// needs to chop that back off.
-		result = strings.TrimRight(result, " ")
-		result = strings.TrimRight(result, ".!?")
+	switch tail {
+	case tailStrip:
+		stripped := strings.TrimRightFunc(out, func(r rune) bool {
+			return unicode.IsSpace(r) || unicode.IsPunct(r)
+		})
+		// A transcription that is ALL punctuation would vanish —
+		// keep it untrimmed instead of inserting nothing.
+		if stripped != "" {
+			out = stripped
+			if ctx.RightKnown && !ctx.AtEnd &&
+				(unicode.IsLetter(ctx.Following) || unicode.IsDigit(ctx.Following)) {
+				out += " "
+			}
+		}
+	case tailKeep:
+		if ctx.RightKnown && (ctx.AtEnd || unicode.IsSpace(ctx.Following)) {
+			out = strings.TrimRight(out, " \t")
+		}
 	}
 
-	if addLeadingSpace {
-		result = " " + result
+	if leadSpace && !strings.HasPrefix(out, " ") {
+		out = " " + out
 	}
-	return result
+	return out
 }

@@ -38,3 +38,7 @@ restore_primary = true
 # the recognized text is always stored/scored uncensored. Toggle live from
 # the tray ("Фильтр мата"). On by default.
 profanity_filter = true
+# Adapt the inserted text to the cursor's surroundings in the focused field
+# (capitalisation, leading space, terminal punctuation) — Linux/AT-SPI.
+# The tray item "Контекстная вставка" applies the per-app prerequisites.
+context_insert = true

@@ -39,6 +39,21 @@ type Actions struct {
 	// on the App's goroutine (avoids racing with F12 flow).
 	OnReprocess func()
 
+	// OnPickVariants opens the multi-inference picker over the cached
+	// variants — the menu twin of the Ctrl+F11 hotkey, so the window
+	// is discoverable without memorising the chord. nil → item hidden
+	// (single-pass mode, no picker binary).
+	OnPickVariants func()
+
+	// Context-insert prerequisites (Linux only). OnSetupContextInsert
+	// applies the missing system / VS Code settings that let Murrly
+	// read the focused field around the cursor, and returns the
+	// resulting ready-state; IsContextInsertReady reports the state at
+	// render time so the item can show "настроена" instead of a
+	// pointless button. nil → item hidden (macOS and friends).
+	OnSetupContextInsert func() bool
+	IsContextInsertReady func() bool
+
 	// Config helpers.
 	OnReloadConfig func()
 	OnOpenConfig   func()

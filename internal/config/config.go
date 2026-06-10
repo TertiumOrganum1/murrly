@@ -90,6 +90,12 @@ type OutputConfig struct {
 	// default; flipped at runtime via the tray "Фильтр мата" toggle and
 	// persisted here.
 	ProfanityFilter bool `toml:"profanity_filter"`
+	// ContextInsert — when true (default), the inserted text is adapted
+	// to the cursor's surroundings in the focused field (capitalisation,
+	// leading space, terminal punctuation), read via AT-SPI on Linux /
+	// the AX API on macOS. Power-user kill switch: set false if some
+	// app's accessibility tree misleads the transform.
+	ContextInsert bool `toml:"context_insert"`
 }
 
 // NemotronConfig configures the second engine (Linux-only; the Break key).
@@ -138,7 +144,7 @@ func defaults() Config {
 		// step. Too short and the focused app reads the restored (old) clipboard
 		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip
 		// tolerates lower values.
-		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true},
+		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ContextInsert: true},
 	}
 }
 

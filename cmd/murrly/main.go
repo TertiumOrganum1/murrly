@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tertiumorganum1/murrly/internal/a11ysetup"
 	"github.com/tertiumorganum1/murrly/internal/app"
 	"github.com/tertiumorganum1/murrly/internal/autostart"
 	"github.com/tertiumorganum1/murrly/internal/clipboard"
@@ -35,14 +36,13 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/transcriber"
 	"github.com/tertiumorganum1/murrly/internal/transcripthistory"
 	"github.com/tertiumorganum1/murrly/internal/tray"
-	// internal/uicontext intentionally not wired here. It reads the
-	// focused UI element via macOS Accessibility, which works fine in
-	// native apps (Notes, TextEdit, Safari URL bar) but reliably
-	// returns no-focused for Electron / webview-based targets — and
-	// the latter is where Murrly is actually used the most (VS Code
-	// chat panels, Slack, Discord, ...). Until we have a workable
-	// path through those, the package sits unused; activating it for
-	// 30% of cases would only confuse the behaviour ("works here,
+	// internal/uicontext is wired on LINUX only (see uicontext_glue.go):
+	// AT-SPI reads Electron / Chromium / Qt / GTK fields fine there once
+	// the per-toolkit prerequisites are on (the tray's "Контекстная
+	// вставка" item applies them). The macOS AX path stays unwired — it
+	// reliably returns no-focused for Electron targets (VS Code chat,
+	// Slack, …), which is where Murrly is used the most; enabling it for
+	// the remaining 30% would only confuse the behaviour ("works here,
 	// silently no-ops there"). See conversation 2026-05-23.
 )
 
@@ -349,8 +349,6 @@ func main() {
 		PasteDelay:  time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond,
 		PadSilence:  cfg.Whisper.PadSilence,
 		Notify:      desktopNotify,
-		// AdjustText (context-aware insertion-point adaptation) is
-		// intentionally not wired — see the uicontext import comment.
 		OnState: func(s app.State) {
 			t.SetState(toTrayState(s))
 			switch s {
@@ -397,6 +395,37 @@ func main() {
 	}
 	if multiRunner != nil || appCfg.Nemotron != nil {
 		appCfg.Picker = pickerAdapter{}
+		// Menu twin of the Ctrl+F11 hotkey. actions is already handed to
+		// tray.New, but the items render at t.Run() — late assignment is
+		// fine.
+		actions.OnPickVariants = func() {
+			select {
+			case events <- app.EventPickCandidate:
+			default:
+			}
+		}
+	}
+
+	// Context-aware insertion (Linux): adapt the pasted text to the
+	// focused field's cursor surroundings. The config flag is the
+	// power-user kill switch; the tray item applies the per-toolkit
+	// prerequisites (gsettings + VS Code) and reports their state.
+	if runtime.GOOS == "linux" {
+		if cfg.Output.ContextInsert {
+			appCfg.AdjustText = adjustTextForContext
+			uictxActive = true
+		}
+		actions.IsContextInsertReady = func() bool { return a11ysetup.Check().Ready() }
+		actions.OnSetupContextInsert = func() bool {
+			st, msgs, err := a11ysetup.Apply()
+			if err != nil {
+				log.Printf("a11y setup: %v", err)
+			}
+			if len(msgs) > 0 {
+				desktopNotify("Murrly: контекстная вставка", strings.Join(msgs, "\n"))
+			}
+			return st.Ready()
+		}
 	}
 	// Tray's Nemotron group (status line + restart). No-op off Linux or when
 	// the engine is disabled.
@@ -671,6 +700,10 @@ func (m *multiAdapter) Run(pcm []float32, leadOffsetSec float64) []app.Variant {
 type pickerAdapter struct{}
 
 func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
+	// Snapshot the insertion context BEFORE the picker window steals
+	// the focus — the post-pick insert must adapt to the target field,
+	// not to the picker's own UI. No-op when context-insert is off.
+	stashUIContext()
 	// Cap the window at the 8 most-recent variants: with two engines and
 	// reprocess rounds the cache can grow past what fits on screen and stays
 	// scannable. The returned index is mapped back to the full slice.
@@ -731,6 +764,7 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 	}
 	d, ok := picker.Pick("", opts)
 	if !ok || d < 0 || d >= len(order) {
+		dropUIContext() // cancelled — don't let the snapshot leak into the next insert
 		return 0, false
 	}
 	return start + order[d], true

@@ -7,6 +7,7 @@ require (
 	fyne.io/systray v1.12.1
 	github.com/BurntSushi/toml v1.6.0
 	github.com/ggerganov/whisper.cpp/bindings/go v0.0.0-00010101000000-000000000000
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/gordonklaus/portaudio v0.0.0-20260203164431-765aa7dfa631
 	golang.design/x/hotkey v0.4.1
 )
@@ -23,7 +24,6 @@ require (
 	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20240506104042-037f3cc74f2a // indirect
 	github.com/go-text/render v0.2.1 // indirect
 	github.com/go-text/typesetting v0.3.4 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/hack-pad/go-indexeddb v0.3.2 // indirect
 	github.com/hack-pad/safejs v0.1.0 // indirect
 	github.com/jeandeaual/go-locale v0.0.0-20250612000132-0ef82f21eade // indirect

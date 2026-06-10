@@ -17,88 +17,193 @@ func TestApplyPassThroughOnEmptyText(t *testing.T) {
 	}
 }
 
-func TestApplyCapitalisesAtStartOfDocument(t *testing.T) {
-	got := Apply("привет. ", Context{HasContext: true, AtStart: true})
-	want := "Привет. "
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
+// Table-driven core: one row per rule from the context-insert spec.
+func TestApplyRules(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		ctx  Context
+		want string
+	}{
+		// --- left side: start of field / replace-all / line start ---
+		{
+			name: "start of empty field capitalises, no leading space",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, AtStart: true},
+			want: "Привет. ",
+		},
+		{
+			name: "replace-all (select-all) behaves as empty field, trailing blank dropped",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, AtStart: true, RightKnown: true, AtEnd: true},
+			want: "Привет.",
+		},
+		{
+			name: "line start (after newline) capitalises, no leading space",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, Preceding: '\n', RightKnown: true, AtEnd: true},
+			want: "Привет.",
+		},
 
-func TestApplyCapitalisesAfterTerminator(t *testing.T) {
-	for _, prev := range []rune{'.', '!', '?'} {
-		ctx := Context{HasContext: true, Preceding: prev}
-		got := Apply("привет. ", ctx)
-		want := " Привет. "
-		if got != want {
-			t.Errorf("preceding=%q: got %q, want %q", prev, got, want)
-		}
-	}
-}
+		// --- left side: after sentence terminator ---
+		{
+			name: "after period adds leading space and capitalises",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, Preceding: '.'},
+			want: " Привет. ",
+		},
+		{
+			name: "after ellipsis char capitalises",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, Preceding: '…'},
+			want: " Привет. ",
+		},
+		{
+			name: "after period with existing space adds no second space",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, Preceding: '.', SpaceBefore: true},
+			want: "Привет. ",
+		},
+		{
+			name: "sentence at end of field drops the dangling blank",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, Preceding: '.', RightKnown: true, AtEnd: true},
+			want: " Привет.",
+		},
+		{
+			name: "sentence before existing space keeps period, drops own blank",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, Preceding: '.', RightKnown: true, Following: ' '},
+			want: " Привет.",
+		},
+		{
+			name: "sentence inserted right before a word keeps period+space",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, Preceding: '.', RightKnown: true, Following: 'С'},
+			want: " Привет. ",
+		},
 
-func TestApplyLowercasesMidSentenceAfterLetter(t *testing.T) {
-	ctx := Context{HasContext: true, Preceding: 'а'}
-	got := Apply("Который я решил. ", ctx)
-	want := " который я решил"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
+		// --- left side: mid-sentence (letter / digit / connector) ---
+		{
+			name: "mid-sentence after letter: lowercase, lead space, strip terminator",
+			text: "Который я решил. ",
+			ctx:  Context{HasContext: true, Preceding: 'а'},
+			want: " который я решил",
+		},
+		{
+			name: "mid-sentence after digit",
+			text: "Дней назад. ",
+			ctx:  Context{HasContext: true, Preceding: '7'},
+			want: " дней назад",
+		},
+		{
+			name: "mid-sentence after comma",
+			text: "Который я решил. ",
+			ctx:  Context{HasContext: true, Preceding: ','},
+			want: " который я решил",
+		},
+		{
+			name: "mid-sentence strips three-dot ellipsis",
+			text: "Который я решил... ",
+			ctx:  Context{HasContext: true, Preceding: 'а'},
+			want: " который я решил",
+		},
+		{
+			name: "mid-sentence strips unicode ellipsis",
+			text: "Который я решил… ",
+			ctx:  Context{HasContext: true, Preceding: 'а'},
+			want: " который я решил",
+		},
+		{
+			name: "mid-sentence strips exclamation+question combo",
+			text: "Который я решил?! ",
+			ctx:  Context{HasContext: true, Preceding: 'а'},
+			want: " который я решил",
+		},
+		{
+			name: "cursor on a letter: word follows, so exactly one trailing space appears",
+			text: "Вставка. ",
+			ctx:  Context{HasContext: true, Preceding: 'а', RightKnown: true, Following: 'с'},
+			want: " вставка ",
+		},
+		{
+			name: "cursor before existing space: no trailing space added",
+			text: "Вставка. ",
+			ctx:  Context{HasContext: true, Preceding: 'а', RightKnown: true, Following: ' '},
+			want: " вставка",
+		},
+		{
+			name: "cursor right before comma: bare tail",
+			text: "Вставка. ",
+			ctx:  Context{HasContext: true, Preceding: 'а', RightKnown: true, Following: ','},
+			want: " вставка",
+		},
+		{
+			name: "mid-sentence at end of field: bare tail",
+			text: "Вставка. ",
+			ctx:  Context{HasContext: true, Preceding: 'а', RightKnown: true, AtEnd: true},
+			want: " вставка",
+		},
+		{
+			name: "space already left of caret, word further left: lowercase, no extra space",
+			text: "Вставка. ",
+			ctx:  Context{HasContext: true, Preceding: 'а', SpaceBefore: true, RightKnown: true, Following: 'с'},
+			want: "вставка ",
+		},
+		{
+			name: "space left of caret after sentence end: capitalise, no extra space",
+			text: "привет. ",
+			ctx:  Context{HasContext: true, Preceding: '.', SpaceBefore: true, RightKnown: true, Following: 'С'},
+			want: "Привет. ",
+		},
 
-func TestApplyLowercasesMidSentenceAfterComma(t *testing.T) {
-	ctx := Context{HasContext: true, Preceding: ','}
-	got := Apply("Который я решил. ", ctx)
-	want := " который я решил"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
+		// --- ambiguous / unknown left context ---
+		{
+			name: "raw space preceding (macOS legacy) leaves text alone",
+			text: "Привет. ",
+			ctx:  Context{HasContext: true, Preceding: ' '},
+			want: "Привет. ",
+		},
+		{
+			name: "bracket preceding leaves text alone",
+			text: "Привет. ",
+			ctx:  Context{HasContext: true, Preceding: '('},
+			want: "Привет. ",
+		},
 
-func TestApplyLeavesAloneWhenPrecededByWhitespace(t *testing.T) {
-	ctx := Context{HasContext: true, Preceding: ' '}
-	got := Apply("Привет. ", ctx)
-	want := "Привет. "
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
-func TestApplyAddsLeadingSpaceAfterDigit(t *testing.T) {
-	ctx := Context{HasContext: true, Preceding: '7'}
-	got := Apply("Дней назад. ", ctx)
-	want := " дней назад"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
-// Already-lowercase first letter shouldn't be touched when we'd
-// only be reapplying the same case.
-func TestApplyDoesNotOverCorrectAlreadyCorrectCase(t *testing.T) {
-	// mid-sentence, first letter already lowercase
-	ctx := Context{HasContext: true, Preceding: 'а'}
-	got := Apply("который я решил. ", ctx)
-	want := " который я решил"
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
+		// --- guards ---
+		{
+			name: "already-lowercase first letter untouched mid-sentence",
+			text: "который я решил. ",
+			ctx:  Context{HasContext: true, Preceding: 'а'},
+			want: " который я решил",
+		},
+		{
+			name: "already-capital first letter untouched at start",
+			text: "Привет. ",
+			ctx:  Context{HasContext: true, AtStart: true},
+			want: "Привет. ",
+		},
+		{
+			name: "non-letter first char: spacing rules only",
+			text: "100 рублей. ",
+			ctx:  Context{HasContext: true, Preceding: 'а'},
+			want: " 100 рублей",
+		},
+		{
+			name: "punctuation-only transcription survives mid-sentence strip",
+			text: "?!",
+			ctx:  Context{HasContext: true, Preceding: 'а'},
+			want: " ?!",
+		},
 	}
 
-	// start-of-document, first letter already uppercase
-	ctx = Context{HasContext: true, AtStart: true}
-	got = Apply("Привет. ", ctx)
-	want = "Привет. "
-	if got != want {
-		t.Errorf("got %q, want %q", got, want)
-	}
-}
-
-// Non-letter first character (digit, punctuation): just apply spacing
-// rules, no casing change.
-func TestApplyHandlesNonLetterStart(t *testing.T) {
-	ctx := Context{HasContext: true, Preceding: 'а'}
-	got := Apply("100 рублей. ", ctx)
-	want := " 100 рублей"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Apply(tc.text, tc.ctx)
+			if got != tc.want {
+				t.Fatalf("Apply(%q, %+v) = %q, want %q", tc.text, tc.ctx, got, tc.want)
+			}
+		})
 	}
 }
