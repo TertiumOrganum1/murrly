@@ -348,6 +348,7 @@ func main() {
 		Paster:      paster.New(),
 		PasteDelay:  time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond,
 		PadSilence:  cfg.Whisper.PadSilence,
+		Notify:      desktopNotify,
 		// AdjustText (context-aware insertion-point adaptation) is
 		// intentionally not wired — see the uicontext import comment.
 		OnState: func(s app.State) {
@@ -550,6 +551,19 @@ func first(snap []string, i int) (string, bool) {
 		return "", false
 	}
 	return snap[i], true
+}
+
+// desktopNotify shows a transient desktop notification. Best-effort: any
+// failure (notify-send / osascript missing) is ignored. Used for non-error
+// hints like a silent microphone.
+func desktopNotify(title, body string) {
+	var cmd *exec.Cmd
+	if runtime.GOOS == "darwin" {
+		cmd = exec.Command("osascript", "-e", fmt.Sprintf("display notification %q with title %q", body, title))
+	} else {
+		cmd = exec.Command("notify-send", "-a", "Murrly", title, body)
+	}
+	_ = cmd.Start()
 }
 
 // openPath opens a file (config or log) in the user's default handler.

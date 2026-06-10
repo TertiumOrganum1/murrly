@@ -144,6 +144,10 @@ type Config struct {
 	// leading whitespace / terminator. Returning the input unchanged
 	// is a valid no-op (and the default when AdjustText is nil).
 	AdjustText func(string) string
+	// Notify shows a transient desktop notification (title, body). Used for
+	// the silent-mic case — a NON-error condition that must not raise the red
+	// error icon. nil → no notification.
+	Notify     func(title, body string)
 	PasteDelay time.Duration
 	// MultiTranscriber, when non-nil, switches F12/Ctrl+F12 to
 	// multi-inference: run N variants, score, insert the best, cache the
@@ -456,6 +460,19 @@ func (a *App) finish() {
 		a.setState(StateIdle)
 		return
 	}
+	// Silent recording = mic muted / not selected / hardware gain at zero —
+	// NOT an error. Tell the user with a notification and stay idle (no red
+	// error icon, which is reserved for real failures); skip the engines and
+	// don't save it as lastPCM so reprocess won't re-run silence.
+	if p := peak(pcm); p < silenceThreshold {
+		dur := float64(len(pcm)) / float64(pcmSampleRateHz)
+		log.Printf("recording: %.2fs but silent (peak %.4f) — mic off / not selected / volume at zero", dur, p)
+		if a.cfg.Notify != nil {
+			a.cfg.Notify("Murrly: тишина", "Микрофон молчит. Выберите другой микрофон или проверьте громкость/выключатель.")
+		}
+		a.setState(StateIdle)
+		return
+	}
 	// Save the freshly-captured PCM so EventReprocess can re-run it
 	// later without re-recording. We replace any previous one — only
 	// the most recent utterance is reachable through "Перепроцессить".
@@ -548,6 +565,26 @@ func (a *App) reprocess() {
 	if a.cfg.Nemotron != nil {
 		a.kickNemotronBackground(a.lastPCM, startPad)
 	}
+}
+
+// silenceThreshold is the peak |sample| (portaudio float32 is in [-1,1])
+// below which a whole recording counts as silent — a muted / unselected mic
+// or a hardware gain knob at zero, not a failure. A dead mic peaks ~0.003;
+// real speech peaks well above 0.05.
+const silenceThreshold = 0.01
+
+// peak returns the largest absolute sample in pcm.
+func peak(pcm []float32) float32 {
+	var m float32
+	for _, s := range pcm {
+		if s < 0 {
+			s = -s
+		}
+		if s > m {
+			m = s
+		}
+	}
+	return m
 }
 
 // padPCM returns a new buffer with startSec of zero samples
