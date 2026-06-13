@@ -340,8 +340,8 @@ func (c *atspiClient) readContext(m ref) (Context, string) {
 
 // opaqueRichEditor reports whether the focused editable element hides
 // its real text behind embed placeholders that resolve only to
-// read-only content — the signature of a custom rich editor (the VS
-// Code / Claude Code chat input) that exposes a single U+FFFC and a
+// read-only content — the signature of a custom rich editor (e.g. the
+// VS Code / Electron chat inputs) that exposes a single U+FFFC and a
 // pinned caret, while the typed text never reaches the accessibility
 // tree at all. Drilling those placeholders yields stale label strings
 // ("Queue another message…", "ctrl esc to focus…"), so any transform

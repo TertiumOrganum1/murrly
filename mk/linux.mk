@@ -41,8 +41,8 @@ start:
 	scripts/start-linux.sh
 
 # stop / restart — single-command wrappers around the kill+install+start
-# cycle so a tooling-agnostic caller (CI, editor task runner, the
-# Claude permissions allow-list) can redeploy Murrly without composing
+# cycle so a tooling-agnostic caller (CI, editor task runner, an
+# automation permissions allow-list) can redeploy Murrly without composing
 # the steps by hand. restart is the common "I changed code, deploy
 # it" target: kill the running binary, rebuild via install's deps,
 # launch the fresh one.
