@@ -719,12 +719,6 @@ func stripTrailingSentencePunct(chunk string) string {
 	return string(runes[:end])
 }
 
-// fillerPhrases is the normalized-key set of Russian discourse
-// markers we treat as filler when they appear as a standalone
-// sentence. Multi-token entries ("как бы", "это самое", "в общем")
-// are matched as units — isFillerOnlyNormalized tries 2-grams before
-// 1-grams. Single occurrences inside a real sentence ("Это вот так
-// получилось") are untouched.
 // knownAbbreviations are Russian short-form words that end in a
 // period without that period being a sentence terminator
 // ("См. также", "проф. Иванов", "млн. рублей"). Listed in lower-case
@@ -746,20 +740,29 @@ var knownAbbreviations = map[string]struct{}{
 	"проф": {}, // профессор
 }
 
-var fillerPhrases = map[string]struct{}{
-	"вот":       {},
-	"так":       {},
-	"значит":    {},
-	"короче":    {},
+// fillerAlways are pure verbal tics: removed both as a standalone sentence
+// and as a comma-isolated clause. These almost never carry meaning.
+var fillerAlways = map[string]struct{}{
 	"ну":        {},
 	"типа":      {},
 	"как бы":    {},
 	"это самое": {},
-	"в общем":   {},
+	"короче":    {},
+}
+
+// fillerAmbiguous are words that are usually tics but can be meaningful
+// ("Так, поехали", "Значит, X равно Y", "Вот это", "В общем, мысль такая").
+// Removed ONLY when they make up a whole standalone sentence ("Так.", "Вот."),
+// never as a comma clause inside a larger sentence, so meaningful uses survive.
+var fillerAmbiguous = map[string]struct{}{
+	"так":     {},
+	"значит":  {},
+	"вот":     {},
+	"в общем": {},
 }
 
 // stripFillerOnlySentences removes sentence chunks whose normalized
-// content tiles entirely with entries from fillerPhrases ("Вот.",
+// content tiles entirely with filler tokens ("Вот.",
 // "Ну как бы.", "В общем."). Runs in the pipeline AFTER
 // joinSingleWordSentenceRuns, so only sentences that remained
 // standalone get filtered — when 3b merged a long stutter run that
@@ -774,7 +777,7 @@ func stripFillerOnlySentences(text string) string {
 	changed := false
 	for _, chunk := range chunks {
 		normalized := normalizeHallucinationKey(chunk)
-		if normalized != "" && isFillerOnlyNormalized(normalized) {
+		if normalized != "" && isFillerOnly(normalized, true) {
 			changed = true
 			continue
 		}
@@ -786,7 +789,13 @@ func stripFillerOnlySentences(text string) string {
 	return strings.Join(out, "")
 }
 
-func isFillerOnlyNormalized(normalized string) bool {
+// isFillerOnly reports whether the normalized text tiles entirely with
+// filler tokens. includeAmbiguous adds the fillerAmbiguous set: true for the
+// standalone-sentence check (drop "Так.", "В общем."), false for the
+// comma-clause check (so "Так," / "В общем," inside a sentence are kept).
+// Multi-token entries ("как бы", "это самое", "в общем") match as 2-grams,
+// tried before 1-grams.
+func isFillerOnly(normalized string, includeAmbiguous bool) bool {
 	tokens := strings.Fields(normalized)
 	if len(tokens) == 0 {
 		return false
@@ -795,18 +804,30 @@ func isFillerOnlyNormalized(normalized string) bool {
 	for i < len(tokens) {
 		if i+1 < len(tokens) {
 			bigram := tokens[i] + " " + tokens[i+1]
-			if _, ok := fillerPhrases[bigram]; ok {
+			if isFillerToken(bigram, includeAmbiguous) {
 				i += 2
 				continue
 			}
 		}
-		if _, ok := fillerPhrases[tokens[i]]; ok {
+		if isFillerToken(tokens[i], includeAmbiguous) {
 			i++
 			continue
 		}
 		return false
 	}
 	return true
+}
+
+func isFillerToken(tok string, includeAmbiguous bool) bool {
+	if _, ok := fillerAlways[tok]; ok {
+		return true
+	}
+	if includeAmbiguous {
+		if _, ok := fillerAmbiguous[tok]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // stripFillerBetweenCommas walks each sentence's comma-delimited
@@ -866,7 +887,7 @@ func dropFillerClauses(chunk string) (string, bool) {
 	dropped := false
 	for _, clause := range clauses {
 		normalized := normalizeHallucinationKey(clause)
-		if normalized != "" && isFillerOnlyNormalized(normalized) {
+		if normalized != "" && isFillerOnly(normalized, false) {
 			dropped = true
 			continue
 		}

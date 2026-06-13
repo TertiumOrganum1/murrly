@@ -196,12 +196,12 @@ func TestFormatSegmentsCollapsesNestedRepeatsInTwoPasses(t *testing.T) {
 // user's actual stutter case (murrly.log 2026/05/24 01:01:58) and
 // assert the pipeline produces a sane result — one copy of the long
 // repeated sentence, plus the unique tail. This exercises the
-// interaction of three filters: collapseRepeatedBlocks (catches the
+// interaction of two filters: collapseRepeatedBlocks (catches the
 // consecutive runs AND folds an A_double chunk back into a single
-// A by collapsing its internal "В общем суть в том ..." duplication),
-// stripFillerBetweenCommas (drops the leading "В общем,"), and
-// dedupeSubstantialSentences (any A copy that survives the
-// consecutive-block pass).
+// A by collapsing its internal "В общем суть в том ..." duplication)
+// and dedupeSubstantialSentences (any A copy that survives the
+// consecutive-block pass). The leading "В общем," is kept now — "в общем"
+// is ambiguous filler, removed only as a standalone sentence, not a clause.
 func TestFormatSegmentsHandlesRealStutterFromLog(t *testing.T) {
 	raw := "Слушай, я диктовал текст, вот последний мой, ну предпоследний получается, учитывая эту реплику, и как будто бы очень много в конце было удалено, ну то есть как будто бы, я не знаю. " +
 		"В общем, посмотри влоги, предпоследнюю реплику, приведи мне сюда ее, ну или знаешь, скажи мне, где лог находится, я сам гляну. " +
@@ -395,7 +395,9 @@ func TestFormatSegmentsNormalisesEllipsisToPeriod(t *testing.T) {
 // filler is dropped, capitalizeAfter… promotes the new first word.
 func TestFormatSegmentsStripsFillerClausesBetweenCommas(t *testing.T) {
 	tests := map[string]string{
-		"Поэтому, типа, в общем, давай поспеши.":  "Поэтому, давай поспеши. ",
+		// "типа" is always-filler (dropped); "в общем" is ambiguous and
+		// is kept as a comma clause inside a real sentence.
+		"Поэтому, типа, в общем, давай поспеши.":  "Поэтому, в общем, давай поспеши. ",
 		"Типа, давай поспеши.":                    "Давай поспеши. ",
 		"Давай поспеши, типа.":                    "Давай поспеши. ",
 		"Давай, ну, как бы, поспеши.":             "Давай, поспеши. ",
@@ -445,9 +447,9 @@ func TestFormatSegmentsCapitalisesAfterFillerClauseRemoval(t *testing.T) {
 // The very first letter of the whole text gets capitalised too,
 // useful when the first sentence's filler was stripped.
 func TestFormatSegmentsCapitalisesFirstLetter(t *testing.T) {
-	got := formatSegments([]string{"В общем, попробовал, ничего не работает."})
-	// "В общем," is a filler clause at sentence start → dropped →
-	// leaves "попробовал, …" lowercase, which we then capitalise.
+	got := formatSegments([]string{"Короче, попробовал, ничего не работает."})
+	// "Короче," is an always-filler clause at sentence start, so it's
+	// dropped, leaving "попробовал, …" lowercase, which we then capitalise.
 	want := "Попробовал, ничего не работает. "
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
