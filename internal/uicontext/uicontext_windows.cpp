@@ -38,7 +38,7 @@ static std::wstring trimWide(const wchar_t* s, UINT len) {
 
 // looksEmptyOrPlaceholder reports whether the focused editable element is
 // actually empty even though its TextPattern may report placeholder text.
-// Chromium/Electron rich editors (the VS Code / Claude Code chat input) hand
+// Chromium/Electron rich editors (e.g. VS Code / Electron chat inputs) hand
 // the placeholder label back as document text with the caret pinned after it,
 // which otherwise reads as a mid-sentence insert. Signals, strongest first:
 //   - ValuePattern value is empty (the real value, placeholder excluded);
@@ -151,8 +151,8 @@ extern "C" int mur_uictx_capture(MurUICtx* out) {
 	out->hasContext = 1;
 	out->rightKnown = 1;
 
-	// An empty field that only shows placeholder text (the VS Code / Claude
-	// Code chat input and similar Electron editors) must read as a fresh
+	// An empty field that only shows placeholder text (VS Code and similar
+	// Electron chat inputs) must read as a fresh
 	// start, not a mid-sentence insert — otherwise the placeholder's last
 	// character becomes a bogus "preceding" and the dictation gets a leading
 	// space / lower-cased first letter.

@@ -50,8 +50,8 @@ func foregroundClass() string {
 // false and Apply passes the dictation through unchanged.
 //
 // Electron/Chromium windows are deliberately skipped: their editable fields
-// report placeholder text as real content with a pinned caret (the VS Code /
-// Claude Code chat input), so UIA can't tell an empty field from a
+// report placeholder text as real content with a pinned caret (VS Code and
+// other Electron chat inputs), so UIA can't tell an empty field from a
 // mid-sentence one. Rather than mangle the dictation (leading space, lower-
 // cased first letter, dropped final punctuation), we pass the text through
 // unchanged there — matching the Linux behaviour of bailing on opaque rich
