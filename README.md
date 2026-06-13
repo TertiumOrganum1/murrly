@@ -396,6 +396,11 @@ MODELS=all scripts/bootstrap-mac.sh
 MODELS=all scripts/bootstrap-ubuntu.sh
 ```
 
+По умолчанию на macOS гоняется 2 варианта распознавания (Metal медленнее CUDA).
+На быстром Mac (M3/M4) можно поднять до 4 — `multi_inference_count = 4` в
+`~/Library/Application Support/Murrly/config.toml` (применяется после
+перезапуска приложения).
+
 ## Быстрый старт на Windows (CUDA)
 
 На Windows функционал тот же, что на Linux (push-to-talk `F12`, переоценка
@@ -450,6 +455,13 @@ scripts\bootstrap-windows.ps1 -Backend cpu
 # пересобрать только бинари, не трогая whisper.cpp
 scripts\build-windows.ps1 -SkipWhisper
 ```
+
+Тулчейн определяется автоматически: MSYS2 — в `C:\msys64` (а также по
+`%MSYS2_ROOT%` или gcc в PATH), Visual Studio — через `vswhere` (любой
+2019/2022/Build Tools), CUDA — по `%CUDA_PATH%`. Видеокарта по умолчанию
+считается Ada (sm_89, RTX 40xx); для другой задайте арку перед сборкой:
+`set CUDA_ARCH=86` (RTX 30xx) или `75` (RTX 20xx). Пути можно переопределить:
+`-MinGW <…\mingw64>`, `-VSRoot <…>`, `-Cuda <…>`.
 
 Конфиг: `%AppData%\Murrly\config.toml`. Лог: `%LocalAppData%\murrly\murrly.log`.
 Автозапуск при логине — тумблер в трее (ключ реестра
@@ -550,7 +562,7 @@ language = ""               # "" = автоопределение; для рус
 beam_size = 5
 beam_adaptive = false       # короткие клипы greedy, длинные beam=5
 pad_silence = false         # обрамлять запись 1 с тишины (тумблер «Тишина по краям»)
-multi_inference_count = 4   # сколько параллельных вариантов гонять (Linux 4, macOS 1–2)
+multi_inference_count = 4   # сколько вариантов гонять; дефолт Linux/Windows 4, macOS 2 — на быстром Mac (M3/M4) можно поднять до 4
 multi_inference = true      # живой вкл/выкл множественного распознавания
 scoring_mode = "combined"   # как выбирается лучший вариант: combined / confidence / heuristic
 initial_prompt = "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability."

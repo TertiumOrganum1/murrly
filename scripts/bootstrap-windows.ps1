@@ -24,11 +24,25 @@ param(
     [string]$Model = 'large-v3-turbo',
     [ValidateSet('cuda', 'cpu')]
     [string]$Backend = 'cuda',
-    [string]$Msys2 = 'H:\msys64'
+    [string]$Msys2 = ''  # MSYS2 root; auto-detected if empty
 )
 
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent $PSScriptRoot
+
+# Find-Msys2 returns the MSYS2 root: the -Msys2 override, then the usual install
+# locations, then derived from gcc already on PATH.
+function Find-Msys2 {
+    if ($Msys2) { return $Msys2 }
+    $roots = @($env:MSYS2_ROOT, 'C:\msys64', "$env:SystemDrive\msys64", 'H:\msys64', 'D:\msys64')
+    foreach ($r in $roots) {
+        if ($r -and (Test-Path (Join-Path $r 'mingw64\bin\gcc.exe'))) { return $r }
+    }
+    $g = Get-Command gcc.exe -ErrorAction SilentlyContinue
+    if ($g) { return (Split-Path (Split-Path (Split-Path $g.Source))) } # ...\mingw64\bin\gcc.exe -> root
+    throw "MSYS2 not found. Install it (https://www.msys2.org/) or pass -Msys2 <root>."
+}
+$Msys2 = Find-Msys2
 
 function Need($name, $cmd) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
