@@ -193,8 +193,12 @@ static bool looksEmptyOrPlaceholder(IUIAutomationElement* el, IUIAutomationTextP
 	bool nameMatches = !docTrim.empty() && (trimW(nameStr) == docTrim || trimW(helpStr) == docTrim);
 	bool placeholderShown = !ph.empty() && (docTrim == ph || trimW(valStr) == ph);
 	bool knownPh = isKnownPlaceholder(docTrim) || isKnownPlaceholder(trimW(valStr));
-	bool empty = (hasVP && valEmpty) || (hasLegacy && legacyEmpty) || docTrim.empty() ||
-		hasFFFC || readOnly || nameMatches || placeholderShown || knownPh;
+	// Decide "empty" only from signals that don't contradict a non-empty
+	// document. ValuePattern/MSAA-empty are deliberately NOT used: Qt apps
+	// (Telegram) report an empty value/legacy even when the field HAS text,
+	// which would wrongly treat a real mid-sentence insert as a fresh start.
+	// If the TextPattern document has real text, the field is not empty.
+	bool empty = docTrim.empty() || hasFFFC || readOnly || nameMatches || placeholderShown || knownPh;
 
 	std::wstring dbg = L"vp=";
 	dbg += hasVP ? (valEmpty ? L"<empty>" : (L"'" + valStr + L"'")) : L"none";

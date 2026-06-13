@@ -165,10 +165,16 @@ func TestApplyRules(t *testing.T) {
 			want: "Привет.",
 		},
 		{
-			name: "bracket preceding leaves text alone",
-			text: "Привет. ",
+			name: "opening bracket is mid-sentence, no leading space",
+			text: "Привет.",
 			ctx:  Context{HasContext: true, Preceding: '('},
-			want: "Привет. ",
+			want: "привет",
+		},
+		{
+			name: "em dash continues the clause",
+			text: "Привет.",
+			ctx:  Context{HasContext: true, Preceding: '—', SpaceBefore: true},
+			want: "привет",
 		},
 
 		// --- guards ---
