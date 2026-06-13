@@ -36,7 +36,18 @@ var (
 	// хуй family: х + у + vowel/й. "хунта", "пастуху", "ночую" don't match.
 	huyRe          = regexp.MustCompile(`ху[йяеиюя]`)
 	enabled        atomic.Bool
+	removeMode     atomic.Bool
 	exceptionStems = parseExceptions(exceptionsRaw)
+)
+
+// removal-cleanup patterns: when "вырезать" is on, a matched word becomes the
+// private-use sentinel , then this collapses the whitespace before it and
+// any punctuation glued to it after ("это, блядь, всё" -> "это, всё";
+// "да блядь!" -> "да").
+var (
+	removeRe           = regexp.MustCompile(`\s*\x{E000}\p{P}*`)
+	multiSpaceRe       = regexp.MustCompile(`[ \t]{2,}`)
+	spaceBeforePunctRe = regexp.MustCompile(` +([,.;:!?…])`)
 )
 
 // ebPrefixed — ебать-family with an explicit prefix (substring-safe: no clean
@@ -67,11 +78,35 @@ func SetEnabled(on bool) { enabled.Store(on) }
 // Enabled reports the current state (for menu rendering / persistence).
 func Enabled() bool { return enabled.Load() }
 
-// Filter masks hard mat per word when enabled; returns text unchanged when
-// disabled. Preserves punctuation and spacing.
+// SetRemoveMode switches the filter between masking (off, the default) and
+// cutting the words out entirely (on). Only matters when Enabled is true.
+func SetRemoveMode(on bool) { removeMode.Store(on) }
+
+// RemoveMode reports the current mode (for menu rendering / persistence).
+func RemoveMode() bool { return removeMode.Load() }
+
+// Filter censors hard mat per word when enabled — masking with bullets, or
+// cutting the word out (with its clinging punctuation) when RemoveMode is on.
+// Returns text unchanged when disabled. Preserves the rest of the punctuation
+// and spacing.
 func Filter(text string) string {
 	if !enabled.Load() {
 		return text
+	}
+	if removeMode.Load() {
+		marked := wordRe.ReplaceAllStringFunc(text, func(w string) string {
+			if !isException(w) && isMat(w) {
+				return ""
+			}
+			return w
+		})
+		if !strings.Contains(marked, "") {
+			return text
+		}
+		out := removeRe.ReplaceAllString(marked, "")
+		out = multiSpaceRe.ReplaceAllString(out, " ")
+		out = spaceBeforePunctRe.ReplaceAllString(out, "$1")
+		return strings.TrimSpace(out)
 	}
 	return wordRe.ReplaceAllStringFunc(text, func(w string) string {
 		if !isException(w) && isMat(w) {

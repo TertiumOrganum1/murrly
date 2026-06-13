@@ -174,6 +174,17 @@ func persistProfanityFilter(cfgPath string, cfg config.Config, on bool) error {
 	return toml.NewEncoder(f).Encode(cfg)
 }
 
+// persistProfanityRemove writes the cut-out-vs-mask choice to config.toml.
+func persistProfanityRemove(cfgPath string, cfg config.Config, on bool) error {
+	cfg.Output.ProfanityRemove = on
+	f, err := os.Create(cfgPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}
+
 // persistNemotronEnabled writes the Nemotron on/off toggle to config.toml
 // so the menu choice survives a restart. Same whole-struct re-encode as the
 // other persist helpers.

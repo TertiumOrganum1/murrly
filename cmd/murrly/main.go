@@ -74,6 +74,7 @@ func main() {
 	// Apply the persisted profanity-filter state before anything can display
 	// or insert text; the tray toggle flips it live afterwards.
 	ruprofane.SetEnabled(cfg.Output.ProfanityFilter)
+	ruprofane.SetRemoveMode(cfg.Output.ProfanityRemove)
 
 	if !macospermissions.EnsureAccessibility() {
 		// First-launch prompt. macOS only shows the system alert once
@@ -283,6 +284,16 @@ func main() {
 				log.Printf("profanity-filter persist: %v", err)
 			}
 			cfg.Output.ProfanityFilter = newState
+			return newState
+		},
+		IsProfanityRemove: ruprofane.RemoveMode,
+		OnToggleProfanityRemove: func() bool {
+			newState := !ruprofane.RemoveMode()
+			ruprofane.SetRemoveMode(newState)
+			if err := persistProfanityRemove(cfgPath, cfg, newState); err != nil {
+				log.Printf("profanity-remove persist: %v", err)
+			}
+			cfg.Output.ProfanityRemove = newState
 			return newState
 		},
 		OnQuit: func() { cancel(); t.Quit() },

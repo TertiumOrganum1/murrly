@@ -90,6 +90,10 @@ type OutputConfig struct {
 	// default; flipped at runtime via the tray "Фильтр лексики" toggle and
 	// persisted here.
 	ProfanityFilter bool `toml:"profanity_filter"`
+	// ProfanityRemove — when true (and ProfanityFilter is on), obscene words
+	// are cut out entirely (with their clinging punctuation) instead of being
+	// masked with bullets. Off by default; tray "Вырезать, а не маскировать".
+	ProfanityRemove bool `toml:"profanity_remove"`
 	// ContextInsert — when true (default), the inserted text is adapted
 	// to the cursor's surroundings in the focused field (capitalisation,
 	// leading space, terminal punctuation), read via AT-SPI on Linux /

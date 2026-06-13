@@ -181,6 +181,9 @@ func (t *Tray) onReady() {
 	profanityChecked := t.actions.IsProfanityOn != nil && t.actions.IsProfanityOn()
 	profanityItem := systray.AddMenuItemCheckbox("Фильтр лексики", "Маскировать обсценную лексику символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
 
+	profanityRemoveChecked := t.actions.IsProfanityRemove != nil && t.actions.IsProfanityRemove()
+	profanityRemoveItem := systray.AddMenuItemCheckbox("Вырезать, а не маскировать", "Когда «Фильтр лексики» включён — вырезать обсценные слова целиком (с прилегающей пунктуацией), а не закрывать «•». Обратимо: оригинал хранится без цензуры", profanityRemoveChecked)
+
 	// Nemotron enable/disable (Linux). Off by default — loads a multi-GB GPU
 	// model — so this is a checkbox the user opts into; turning it on starts
 	// the sidecar but the engine wires only on the next Murrly start.
@@ -448,6 +451,15 @@ func (t *Tray) onReady() {
 						profanityItem.Uncheck()
 					}
 					// Re-censor (or restore) the recent-phrase titles at once.
+					updateTranscriptMenuItems(copyItems, lastTranscripts)
+				}
+			case <-profanityRemoveItem.ClickedCh:
+				if t.actions.OnToggleProfanityRemove != nil {
+					if t.actions.OnToggleProfanityRemove() {
+						profanityRemoveItem.Check()
+					} else {
+						profanityRemoveItem.Uncheck()
+					}
 					updateTranscriptMenuItems(copyItems, lastTranscripts)
 				}
 			case <-quitItem.ClickedCh:

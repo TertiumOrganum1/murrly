@@ -80,6 +80,12 @@ type Actions struct {
 	OnToggleProfanity func() bool
 	IsProfanityOn     func() bool
 
+	// Profanity remove-vs-mask toggle ("Вырезать, а не маскировать"). When on,
+	// obscene words are cut out entirely instead of masked with bullets;
+	// effective only while the lexis filter is on. Same shape as above.
+	OnToggleProfanityRemove func() bool
+	IsProfanityRemove       func() bool
+
 	// Multi-inference toggle ("Множественное распознавание"). Same shape
 	// as autostart: OnToggleMulti flips the live state and returns the new
 	// value; IsMultiOn reports the initial value at render time. Left nil
