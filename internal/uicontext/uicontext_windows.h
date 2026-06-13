@@ -17,6 +17,7 @@ typedef struct {
 	int preceding;   // first non-blank code point to the left ('\n' = line start)
 	int following;   // code point immediately to the right (not blank-skipped)
 	int stage;       // diagnostic: how far capture got (see uicontext_windows.cpp)
+	unsigned short dbg[256]; // diagnostic: UTF-16 summary of the empty/placeholder signals
 } MurUICtx;
 
 // mur_uictx_capture fills *out from the focused UI Automation element.

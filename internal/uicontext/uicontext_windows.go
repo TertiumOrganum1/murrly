@@ -9,7 +9,24 @@ package uicontext
 */
 import "C"
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf16"
+)
+
+// decodeDbg reads the NUL-terminated UTF-16 diagnostic summary the C capture
+// records in out->dbg (empty/placeholder signals), for the log.
+func decodeDbg(c *C.MurUICtx) string {
+	u := make([]uint16, 0, 256)
+	for i := 0; i < 256; i++ {
+		ch := uint16(c.dbg[i])
+		if ch == 0 {
+			break
+		}
+		u = append(u, ch)
+	}
+	return string(utf16.Decode(u))
+}
 
 // stageDesc maps the C capture stage to a human label for the log.
 var stageDesc = map[int]string{
@@ -46,6 +63,6 @@ func Capture() Context {
 		AtEnd:       c.atEnd != 0,
 		Preceding:   rune(c.preceding),
 		Following:   rune(c.following),
-		Status:      "windows-uia",
+		Status:      "windows-uia [" + decodeDbg(&c) + "]",
 	}
 }

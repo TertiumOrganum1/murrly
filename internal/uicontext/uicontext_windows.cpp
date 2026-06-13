@@ -23,6 +23,8 @@ static const GUID kIID_IUIAutomationTextPattern =
     {0x32eba289, 0x3583, 0x42c9, {0x9c, 0x59, 0x3b, 0x6d, 0x9a, 0x1e, 0x9b, 0x6a}};
 static const GUID kIID_IUIAutomationValuePattern =
     {0xa94cd8b1, 0x0844, 0x4cd6, {0x9d, 0x2d, 0x64, 0x05, 0x37, 0xab, 0x39, 0xe9}};
+static const GUID kIID_IUIAutomationLegacyIAccessiblePattern =
+    {0x828055ad, 0x355b, 0x4435, {0x86, 0xd5, 0x3b, 0x51, 0xc1, 0x4a, 0x9b, 0x1b}};
 
 // How many characters to read on each side of the caret. We only need the
 // boundary, so a small window keeps GetText cheap even in huge documents.
@@ -45,78 +47,168 @@ static std::wstring trimWide(const wchar_t* s, UINT len) {
 //   - the document text is blank or a single U+FFFC embed placeholder;
 //   - the document text equals the element's Name/HelpText (placeholder shown
 //     as the accessible label of an empty field).
-static bool looksEmptyOrPlaceholder(IUIAutomationElement* el, IUIAutomationTextPattern* tp) {
-	// ValuePattern: most reliable. Inputs/textareas expose the true value.
+static std::wstring bstrToW(BSTR b) {
+	return b ? std::wstring(b, SysStringLen(b)) : std::wstring();
+}
+
+// getStrProp reads a string (BSTR) UIA property off an element, or "".
+static std::wstring getStrProp(IUIAutomationElement* el, PROPERTYID id) {
+	VARIANT v;
+	VariantInit(&v);
+	std::wstring out;
+	if (SUCCEEDED(el->GetCurrentPropertyValue(id, &v)) && v.vt == VT_BSTR && v.bstrVal) {
+		out = std::wstring(v.bstrVal, SysStringLen(v.bstrVal));
+	}
+	VariantClear(&v);
+	return out;
+}
+
+static std::wstring trimW(const std::wstring& s) {
+	return trimWide(s.c_str(), (UINT)s.size());
+}
+
+// isKnownPlaceholder matches placeholder hints from chat editors that expose
+// the placeholder AS the field value, with no structural flag (read-only,
+// aria-placeholder, empty value/legacy/MSAA) to tell it apart from real
+// content. Matching them lets such an empty field read as a fresh start rather
+// than a mid-sentence insert. Matched by case-insensitive prefix so we don't
+// store vendor names verbatim and minor placeholder wording still matches; if
+// a new placeholder appears, the log (out->dbg) shows it and it's one line to
+// add here.
+static bool isKnownPlaceholder(const std::wstring& s) {
+	if (s.empty()) return false;
+	std::wstring low;
+	low.reserve(s.size());
+	for (wchar_t c : s) low += (wchar_t)towlower(c);
+	static const wchar_t* prefixes[] = {
+		L"ctrl esc to focus or unfocus",
+		L"queue another message",
+	};
+	for (const wchar_t* p : prefixes) {
+		std::wstring pp(p);
+		if (low.size() >= pp.size() && low.compare(0, pp.size(), pp) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// setDbg copies a UTF-16 diagnostic summary into out->dbg (truncated).
+static void setDbg(MurUICtx* out, const std::wstring& s) {
+	size_t n = s.size();
+	if (n > 255) n = 255;
+	for (size_t i = 0; i < n; i++) out->dbg[i] = (unsigned short)s[i];
+	out->dbg[n] = 0;
+}
+
+// looksEmptyOrPlaceholder gathers every "is this field actually empty" signal
+// and records a diagnostic summary in out->dbg for the log. An empty field
+// that shows placeholder text (chat inputs etc.) must read as a fresh start,
+// not a mid-sentence insert.
+static bool looksEmptyOrPlaceholder(IUIAutomationElement* el, IUIAutomationTextPattern* tp, MurUICtx* out) {
+	bool hasVP = false, valEmpty = false;
+	std::wstring valStr;
 	IUnknown* vunk = NULL;
 	if (SUCCEEDED(el->GetCurrentPattern(UIA_ValuePatternId, &vunk)) && vunk) {
 		IUIAutomationValuePattern* vp = NULL;
 		if (SUCCEEDED(vunk->QueryInterface(kIID_IUIAutomationValuePattern, (void**)&vp)) && vp) {
+			hasVP = true;
 			BSTR val = NULL;
-			bool empty = false;
 			if (SUCCEEDED(vp->get_CurrentValue(&val))) {
-				empty = (val == NULL) || trimWide(val, SysStringLen(val)).empty();
+				valStr = bstrToW(val);
+				valEmpty = trimW(valStr).empty();
 			}
 			if (val) SysFreeString(val);
 			vp->Release();
-			if (empty) {
-				vunk->Release();
-				return true; // empty value is a strong "empty" signal
-			}
-			// A non-empty value is NOT a reliable "has content" signal for
-			// contenteditables (they can report placeholder text), so fall
-			// through to the document / name checks below.
 		}
 		vunk->Release();
 	}
 
-	// No ValuePattern (e.g. a contenteditable): inspect the document text.
-	IUIAutomationTextRange* doc = NULL;
-	if (FAILED(tp->get_DocumentRange(&doc)) || doc == NULL) {
-		return false;
+	// LegacyIAccessible value = the MSAA value, which usually reflects the
+	// real (typed) content rather than the placeholder TextPattern reports.
+	bool hasLegacy = false, legacyEmpty = false;
+	std::wstring legacyVal;
+	IUnknown* lunk = NULL;
+	if (SUCCEEDED(el->GetCurrentPattern(UIA_LegacyIAccessiblePatternId, &lunk)) && lunk) {
+		IUIAutomationLegacyIAccessiblePattern* lp = NULL;
+		if (SUCCEEDED(lunk->QueryInterface(kIID_IUIAutomationLegacyIAccessiblePattern, (void**)&lp)) && lp) {
+			hasLegacy = true;
+			BSTR lv = NULL;
+			if (SUCCEEDED(lp->get_CurrentValue(&lv))) {
+				legacyVal = bstrToW(lv);
+				legacyEmpty = trimW(legacyVal).empty();
+			}
+			if (lv) SysFreeString(lv);
+			lp->Release();
+		}
+		lunk->Release();
 	}
-	BSTR docText = NULL;
-	doc->GetText(512, &docText);
 
-	// Placeholder text (the empty-field hint in web/Electron editors) is
-	// read-only; real typed content is not. If the whole document range reads
-	// as read-only, the field is effectively empty and just showing its
-	// placeholder — treat it as a fresh start. UIA_IsReadOnlyAttributeId =
-	// 40015; the value is VT_BOOL (VARIANT_TRUE when read-only), or the
-	// reserved "mixed" object when the range isn't uniform (left as false).
-	bool readOnly = false;
-	VARIANT v;
-	VariantInit(&v);
-	if (SUCCEEDED(doc->GetAttributeValue(40015, &v))) {
-		if (v.vt == VT_BOOL && v.boolVal != VARIANT_FALSE) {
-			readOnly = true;
+	std::wstring docStr;
+	bool readOnly = false, hasFFFC = false;
+	IUIAutomationTextRange* doc = NULL;
+	if (SUCCEEDED(tp->get_DocumentRange(&doc)) && doc) {
+		BSTR docText = NULL;
+		doc->GetText(512, &docText);
+		docStr = bstrToW(docText);
+		if (docText) SysFreeString(docText);
+		for (size_t i = 0; i < docStr.size(); i++) {
+			if (docStr[i] == 0xFFFC) hasFFFC = true;
+		}
+		// UIA_IsReadOnlyAttributeId = 40015. Placeholder text is read-only,
+		// real typed content is not.
+		VARIANT v;
+		VariantInit(&v);
+		if (SUCCEEDED(doc->GetAttributeValue(40015, &v))) {
+			if (v.vt == VT_BOOL && v.boolVal != VARIANT_FALSE) readOnly = true;
+		}
+		VariantClear(&v);
+		doc->Release();
+	}
+
+	BSTR name = NULL, help = NULL;
+	el->get_CurrentName(&name);
+	el->get_CurrentHelpText(&help);
+	std::wstring nameStr = bstrToW(name), helpStr = bstrToW(help);
+	if (name) SysFreeString(name);
+	if (help) SysFreeString(help);
+
+	// AriaProperties (UIA_AriaPropertiesPropertyId = 30102) is a "k=v;k=v"
+	// string; Chromium puts the field's placeholder there. If the document /
+	// value text equals that placeholder, the field is empty and just showing
+	// the hint — the reliable, non-hardcoded signal we were missing.
+	std::wstring ariaStr = getStrProp(el, 30102);
+	std::wstring fullStr = getStrProp(el, 40034); // UIA_FullDescriptionPropertyId
+	std::wstring ph;
+	{
+		size_t p = ariaStr.find(L"placeholder=");
+		if (p != std::wstring::npos) {
+			size_t s = p + 12; // strlen("placeholder=")
+			size_t e = ariaStr.find(L';', s);
+			ph = trimW(ariaStr.substr(s, e == std::wstring::npos ? std::wstring::npos : e - s));
 		}
 	}
-	VariantClear(&v);
-	doc->Release();
 
-	if (docText == NULL) {
-		return readOnly;
-	}
-	UINT len = SysStringLen(docText);
-	std::wstring trimmed = trimWide(docText, len);
-	bool hasFFFC = false;
-	for (UINT i = 0; i < len; i++) {
-		if (docText[i] == 0xFFFC) hasFFFC = true;
-	}
-	bool result = false;
-	if (trimmed.empty() || hasFFFC || readOnly) {
-		result = true;
-	} else {
-		BSTR name = NULL, help = NULL;
-		el->get_CurrentName(&name);
-		el->get_CurrentHelpText(&help);
-		if (name && trimWide(name, SysStringLen(name)) == trimmed) result = true;
-		if (help && trimWide(help, SysStringLen(help)) == trimmed) result = true;
-		if (name) SysFreeString(name);
-		if (help) SysFreeString(help);
-	}
-	SysFreeString(docText);
-	return result;
+	std::wstring docTrim = trimW(docStr);
+	bool nameMatches = !docTrim.empty() && (trimW(nameStr) == docTrim || trimW(helpStr) == docTrim);
+	bool placeholderShown = !ph.empty() && (docTrim == ph || trimW(valStr) == ph);
+	bool knownPh = isKnownPlaceholder(docTrim) || isKnownPlaceholder(trimW(valStr));
+	bool empty = (hasVP && valEmpty) || (hasLegacy && legacyEmpty) || docTrim.empty() ||
+		hasFFFC || readOnly || nameMatches || placeholderShown || knownPh;
+
+	std::wstring dbg = L"vp=";
+	dbg += hasVP ? (valEmpty ? L"<empty>" : (L"'" + valStr + L"'")) : L"none";
+	dbg += L" legacy=";
+	dbg += hasLegacy ? (legacyEmpty ? L"<empty>" : (L"'" + legacyVal + L"'")) : L"none";
+	dbg += L" ro=" + std::wstring(readOnly ? L"1" : L"0");
+	dbg += L" fffc=" + std::wstring(hasFFFC ? L"1" : L"0");
+	dbg += L" doc='" + docStr + L"'";
+	dbg += L" name='" + nameStr + L"' help='" + helpStr + L"'";
+	dbg += L" aria='" + ariaStr + L"' ph='" + ph + L"' full='" + fullStr + L"'";
+	dbg += L" => empty=" + std::wstring(empty ? L"1" : L"0");
+	setDbg(out, dbg);
+
+	return empty;
 }
 
 extern "C" int mur_uictx_capture(MurUICtx* out) {
@@ -178,7 +270,7 @@ extern "C" int mur_uictx_capture(MurUICtx* out) {
 	// start, not a mid-sentence insert — otherwise the placeholder's last
 	// character becomes a bogus "preceding" and the dictation gets a leading
 	// space / lower-cased first letter.
-	if (looksEmptyOrPlaceholder(el, tp)) {
+	if (looksEmptyOrPlaceholder(el, tp, out)) {
 		out->atStart = 1;
 		out->atEnd = 1;
 		result = 1;
