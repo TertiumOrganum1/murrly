@@ -159,10 +159,10 @@ func TestApplyRules(t *testing.T) {
 
 		// --- ambiguous / unknown left context ---
 		{
-			name: "raw space preceding (macOS legacy) leaves text alone",
-			text: "Привет. ",
+			name: "whitespace-only left context is a fresh start (capitalise, keep punctuation)",
+			text: "привет.",
 			ctx:  Context{HasContext: true, Preceding: ' '},
-			want: "Привет. ",
+			want: "Привет.",
 		},
 		{
 			name: "bracket preceding leaves text alone",

@@ -85,10 +85,14 @@ func Apply(text string, ctx Context) string {
 		leadSpace = !ctx.SpaceBefore
 		tail = tailStrip
 	case unicode.IsSpace(ctx.Preceding):
-		// macOS legacy: a raw blank to the left and nothing known
-		// beyond it — could be between sentences or after a comma.
-		// Don't risk a bad transform.
-		return text
+		// Only whitespace to the left — a field holding just blanks, or a
+		// blank that isn't a plain newline. Treat it as a fresh start, NOT a
+		// mid-sentence insert: capitalise, keep the phrase's own terminal
+		// punctuation, no leading space. Never decapitalise or strip here.
+		// (AtStart and '\n' already take the start path above; this covers
+		// the remaining whitespace cases.)
+		capitalize = true
+		tail = tailKeep
 	default:
 		// Brackets, quotes, emoji, dashes… — no safe guess.
 		return text
