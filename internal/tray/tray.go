@@ -183,6 +183,11 @@ func (t *Tray) onReady() {
 
 	profanityRemoveChecked := t.actions.IsProfanityRemove != nil && t.actions.IsProfanityRemove()
 	profanityRemoveItem := systray.AddMenuItemCheckbox("Вырезать, а не маскировать", "Когда «Фильтр лексики» включён — вырезать обсценные слова целиком (с прилегающей пунктуацией), а не закрывать «•». Обратимо: оригинал хранится без цензуры", profanityRemoveChecked)
+	// The cut-out option only applies while the filter is on — grey it out
+	// otherwise.
+	if !profanityChecked {
+		profanityRemoveItem.Disable()
+	}
 
 	// Nemotron enable/disable (Linux). Off by default — loads a multi-GB GPU
 	// model — so this is a checkbox the user opts into; turning it on starts
@@ -447,8 +452,10 @@ func (t *Tray) onReady() {
 				if t.actions.OnToggleProfanity != nil {
 					if t.actions.OnToggleProfanity() {
 						profanityItem.Check()
+						profanityRemoveItem.Enable()
 					} else {
 						profanityItem.Uncheck()
+						profanityRemoveItem.Disable()
 					}
 					// Re-censor (or restore) the recent-phrase titles at once.
 					updateTranscriptMenuItems(copyItems, lastTranscripts)
