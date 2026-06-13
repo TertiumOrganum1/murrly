@@ -10,6 +10,10 @@ ifeq ($(UNAME_S),Linux)
   include mk/linux.mk
 else ifeq ($(UNAME_S),Darwin)
   include mk/darwin.mk
+else ifneq (,$(findstring MINGW,$(UNAME_S)))
+  include mk/windows.mk
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+  include mk/windows.mk
 else
   $(error Unsupported OS: $(UNAME_S))
 endif

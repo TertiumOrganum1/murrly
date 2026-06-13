@@ -73,7 +73,7 @@ type Actions struct {
 	OnTogglePadSilence func() bool
 	IsPadSilenceOn     func() bool
 
-	// Profanity filter toggle ("Фильтр мата"). Same shape as autostart:
+	// Profanity filter toggle ("Фильтр лексики"). Same shape as autostart:
 	// OnToggleProfanity flips the live state (mask obscene words at display
 	// and insertion) and returns the new value; IsProfanityOn reports the
 	// initial value at render time.

@@ -13,3 +13,6 @@ import "embed"
 var iconFS embed.FS
 
 const iconDir = "assets/tray/darwin"
+
+// iconExt is the embedded tray-icon extension on this platform.
+const iconExt = ".png"

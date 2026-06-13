@@ -1,15 +1,69 @@
-// Package recorder captures audio from the default input device into a mono
-// 16 kHz float32 PCM buffer between Start and Stop.
+// Package recorder captures audio from an input device into a mono 16 kHz
+// float32 PCM buffer between Start and Stop. By default it uses the system
+// default input; a device can be pinned by name via SetInputDevice (config
+// [audio] device) so a change of the OS default (e.g. a wireless mic going
+// active) doesn't silently switch capture to a dead device.
 package recorder
 
 import (
 	"fmt"
+	"log"
+	"strings"
 	"sync"
 
 	"github.com/gordonklaus/portaudio"
 )
 
 const sampleRate = 16000
+
+// inputDeviceName, when non-empty, pins capture to the first input device
+// whose name contains it (case-insensitive). Set once at startup.
+var inputDeviceName string
+
+// SetInputDevice pins the capture device by name substring. Empty = OS default.
+func SetInputDevice(name string) { inputDeviceName = strings.TrimSpace(name) }
+
+// openInputStream opens a mono 16 kHz input stream on the pinned device, or
+// the system default when none is pinned (or the pinned one isn't found).
+func openInputStream(frame []float32) (*portaudio.Stream, error) {
+	if inputDeviceName == "" {
+		return portaudio.OpenDefaultStream(1, 0, sampleRate, len(frame), frame)
+	}
+	dev, err := findInputDevice(inputDeviceName)
+	if err != nil {
+		log.Printf("recorder: %v — falling back to default input", err)
+		return portaudio.OpenDefaultStream(1, 0, sampleRate, len(frame), frame)
+	}
+	log.Printf("recorder: using input device %q [%s]", dev.Name, dev.HostApi.Name)
+	params := portaudio.StreamParameters{
+		Input: portaudio.StreamDeviceParameters{
+			Device:   dev,
+			Channels: 1,
+			Latency:  dev.DefaultLowInputLatency,
+		},
+		SampleRate:      sampleRate,
+		FramesPerBuffer: len(frame),
+	}
+	return portaudio.OpenStream(params, frame)
+}
+
+// findInputDevice returns the first input-capable device whose name contains
+// the given substring (case-insensitive). MME devices enumerate first and are
+// the most permissive about arbitrary sample rates, so a bare name like
+// "USB PnP" lands on the MME variant.
+func findInputDevice(name string) (*portaudio.DeviceInfo, error) {
+	devs, err := portaudio.Devices()
+	if err != nil {
+		return nil, err
+	}
+	lname := strings.ToLower(name)
+	for _, d := range devs {
+		if d.MaxInputChannels > 0 && strings.Contains(strings.ToLower(d.Name), lname) {
+			return d, nil
+		}
+	}
+	return nil, fmt.Errorf("no input device matching %q", name)
+}
 
 type Recorder struct {
 	mu     sync.Mutex

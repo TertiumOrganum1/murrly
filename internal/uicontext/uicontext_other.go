@@ -1,10 +1,10 @@
-//go:build !darwin && !linux
+//go:build !darwin && !linux && !windows
 
 package uicontext
 
-// Capture is a no-op outside macOS (AX API) and Linux (AT-SPI).
-// Returning HasContext=false makes Apply pass the text through
-// unchanged.
+// Capture is a no-op outside macOS (AX API), Linux (AT-SPI) and Windows
+// (UI Automation). Returning HasContext=false makes Apply pass the text
+// through unchanged.
 func Capture() Context {
 	return Context{Status: "unsupported-platform"}
 }

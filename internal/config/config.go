@@ -87,7 +87,7 @@ type OutputConfig struct {
 	// ProfanityFilter — when true, Russian obscene words (мат) are masked
 	// with bullets at display (picker + recent-phrase menu) and insertion
 	// only; the recognized text is always stored/scored uncensored. On by
-	// default; flipped at runtime via the tray "Фильтр мата" toggle and
+	// default; flipped at runtime via the tray "Фильтр лексики" toggle and
 	// persisted here.
 	ProfanityFilter bool `toml:"profanity_filter"`
 	// ContextInsert — when true (default), the inserted text is adapted

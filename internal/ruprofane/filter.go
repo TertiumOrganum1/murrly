@@ -6,7 +6,7 @@
 //
 // It is a VIEW transform, applied only at display (picker plaques + the
 // recent-phrase tray menu) and at insertion, gated by a runtime toggle (tray
-// "Фильтр мата", on by default). The recognized text is always stored and
+// "Фильтр лексики", on by default). The recognized text is always stored and
 // scored uncensored, so a false positive never destroys the phrase: untick
 // the box and the original reappears.
 //

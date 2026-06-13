@@ -1,13 +1,13 @@
-//go:build linux || darwin
+//go:build linux || darwin || windows
 
 // Package picker shows a single-select chooser so the user can pick among
-// multi-inference variants. On Linux and macOS it spawns the standalone
-// Fyne binary (murrly-picker): options go in on stdin (NUL-separated,
-// since a variant may span several lines), the chosen 0-based index comes
-// back on stdout. The spawn + read logic here is platform-neutral; the
-// binary handles its own placement (X11 taskbar-skip + centring on Linux,
-// Fyne's default centred frontmost window on macOS), so this driver is
-// just spawn + read on both.
+// multi-inference variants. On Linux, macOS and Windows it spawns the
+// standalone Fyne binary (murrly-picker): options go in on stdin
+// (NUL-separated, since a variant may span several lines), the chosen
+// 0-based index comes back on stdout. The spawn + read logic here is
+// platform-neutral; the binary handles its own placement (X11 taskbar-skip +
+// centring on Linux, Fyne's default centred frontmost window elsewhere), so
+// this driver is just spawn + read everywhere.
 package picker
 
 import (
@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -50,12 +51,20 @@ func Pick(text string, options []string) (int, bool) {
 	return n, true
 }
 
+// exeName appends Windows' .exe extension to a base executable name.
+func exeName(base string) string {
+	if runtime.GOOS == "windows" {
+		return base + ".exe"
+	}
+	return base
+}
+
 // pickerBinary locates the murrly-picker executable. It's installed
 // alongside murrly itself, so the sibling of the running binary is the
 // first and normal hit; PATH and the dev build dir are fallbacks.
 func pickerBinary() string {
 	if exe, err := os.Executable(); err == nil {
-		sibling := filepath.Join(filepath.Dir(exe), "murrly-picker")
+		sibling := filepath.Join(filepath.Dir(exe), exeName("murrly-picker"))
 		if isExec(sibling) {
 			return sibling
 		}
@@ -63,13 +72,22 @@ func pickerBinary() string {
 	if p, err := exec.LookPath("murrly-picker"); err == nil {
 		return p
 	}
-	if isExec("bin/picker") { // dev: `go build -o bin/picker ./cmd/picker`
-		return "bin/picker"
+	if dev := filepath.Join("bin", exeName("picker")); isExec(dev) { // dev: `go build -o bin/picker ./cmd/picker`
+		return dev
 	}
 	return ""
 }
 
+// isExec reports whether path is a runnable file. On Windows the Unix
+// executable bit is meaningless (Stat reports it inconsistently), so we only
+// require a regular file; the .exe extension is what makes it runnable there.
 func isExec(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return info.Mode()&0o111 != 0
 }

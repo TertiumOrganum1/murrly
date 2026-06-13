@@ -179,7 +179,7 @@ func (t *Tray) onReady() {
 	padSilenceItem := systray.AddMenuItemCheckbox("Тишина по краям", "Добавлять 1 с тишины с обеих сторон каждой записи перед Whisper", padSilenceChecked)
 
 	profanityChecked := t.actions.IsProfanityOn != nil && t.actions.IsProfanityOn()
-	profanityItem := systray.AddMenuItemCheckbox("Фильтр мата", "Маскировать русский мат символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
+	profanityItem := systray.AddMenuItemCheckbox("Фильтр лексики", "Маскировать обсценную лексику символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
 
 	// Nemotron enable/disable (Linux). Off by default — loads a multi-GB GPU
 	// model — so this is a checkbox the user opts into; turning it on starts

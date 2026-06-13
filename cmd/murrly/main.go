@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -89,6 +88,10 @@ func main() {
 		log.Fatalf("portaudio: %v", err)
 	}
 	defer recorder.TerminatePortAudio()
+	// Pin the capture device by name when [audio] device is set; empty (the
+	// default) keeps the OS default input — so a change of the system default
+	// is the only thing that switches the mic.
+	recorder.SetInputDevice(cfg.Audio.Device)
 
 	// Surface the mic permission prompt right at startup by momentarily
 	// opening (and immediately closing) a default input stream. Only
@@ -164,10 +167,10 @@ func main() {
 	cb.RestorePrimary = cfg.Output.RestorePrimary
 
 	icons := map[tray.State][]byte{
-		tray.StateIdle:         mustReadIcon("idle_44.png"),
-		tray.StateRecording:    mustReadIcon("recording_44.png"),
-		tray.StateTranscribing: mustReadIcon("transcribing_44.png"),
-		tray.StateError:        mustReadIcon("error_44.png"),
+		tray.StateIdle:         mustReadIcon("idle_44" + iconExt),
+		tray.StateRecording:    mustReadIcon("recording_44" + iconExt),
+		tray.StateTranscribing: mustReadIcon("transcribing_44" + iconExt),
+		tray.StateError:        mustReadIcon("error_44" + iconExt),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -413,15 +416,18 @@ func main() {
 		}
 	}
 
-	// Context-aware insertion (Linux): adapt the pasted text to the
-	// focused field's cursor surroundings. The config flag is the
-	// power-user kill switch; the tray item applies the per-toolkit
-	// prerequisites (gsettings + VS Code) and reports their state.
-	if runtime.GOOS == "linux" {
-		if cfg.Output.ContextInsert {
-			appCfg.AdjustText = adjustTextForContext
-			uictxActive = true
-		}
+	// Context-aware insertion: adapt the pasted text to the focused field's
+	// cursor surroundings. Linux reads it via AT-SPI, Windows via UI
+	// Automation (uicontext.Capture); macOS leaves it unwired. The config
+	// flag is the power-user kill switch.
+	if cfg.Output.ContextInsert && (runtime.GOOS == "linux" || runtime.GOOS == "windows") {
+		appCfg.AdjustText = adjustTextForContext
+		uictxActive = true
+	}
+	// Setup item: Linux applies the AT-SPI prerequisites (gsettings + VS Code);
+	// Windows applies the VS Code editor.accessibilitySupport flag that
+	// Electron/Chromium need to expose their UIA tree. macOS leaves it unwired.
+	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		actions.IsContextInsertReady = func() bool { return a11ysetup.Check().Ready() }
 		actions.OnSetupContextInsert = func() bool {
 			st, msgs, err := a11ysetup.Apply()
@@ -614,58 +620,29 @@ func first(snap []string, i int) (string, bool) {
 	return snap[i], true
 }
 
-// terminateOtherInstances sends SIGTERM to any other running Murrly process
-// (same executable basename) and waits up to ~3s for each to exit, so its
-// GPU/CUDA context is torn down cleanly before this instance loads its model.
-// SIGTERM, never SIGKILL: a hard kill mid-cudaMalloc is exactly what leaks an
-// unreclaimable context. A wedged instance that ignores SIGTERM is left alone
-// (logged) rather than force-killed.
-func terminateOtherInstances() {
-	self := os.Getpid()
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	name := filepath.Base(exe)
-	out, err := exec.Command("pgrep", "-x", name).Output()
-	if err != nil {
-		return // none found, or pgrep unavailable
-	}
-	var others []int
-	for _, f := range strings.Fields(string(out)) {
-		pid, perr := strconv.Atoi(f)
-		if perr != nil || pid == self {
-			continue
-		}
-		if syscall.Kill(pid, syscall.SIGTERM) == nil {
-			others = append(others, pid)
-		}
-	}
-	if len(others) == 0 {
-		return
-	}
-	log.Printf("startup: SIGTERM to stale Murrly instance(s) %v, waiting for clean exit", others)
-	for _, pid := range others {
-		for i := 0; i < 30; i++ { // up to ~3s per instance
-			if syscall.Kill(pid, 0) != nil {
-				break // gone
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if syscall.Kill(pid, 0) == nil {
-			log.Printf("startup: instance %d still alive after SIGTERM — proceeding anyway", pid)
-		}
-	}
-}
-
 // desktopNotify shows a transient desktop notification. Best-effort: any
 // failure (notify-send / osascript missing) is ignored. Used for non-error
 // hints like a silent microphone.
 func desktopNotify(title, body string) {
 	var cmd *exec.Cmd
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		cmd = exec.Command("osascript", "-e", fmt.Sprintf("display notification %q with title %q", body, title))
-	} else {
+	case "windows":
+		// WinRT toast via PowerShell — no external module needed on Win10+.
+		// Single-quoted PS literals escape ' by doubling it.
+		esc := func(s string) string { return strings.ReplaceAll(s, "'", "''") }
+		script := fmt.Sprintf(`$ErrorActionPreference='SilentlyContinue';`+
+			`[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];`+
+			`$t=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);`+
+			`$x=$t.GetElementsByTagName('text');`+
+			`$x.Item(0).AppendChild($t.CreateTextNode('%s'))|Out-Null;`+
+			`$x.Item(1).AppendChild($t.CreateTextNode('%s'))|Out-Null;`+
+			`$n=[Windows.UI.Notifications.ToastNotification]::new($t);`+
+			`[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Murrly').Show($n);`,
+			esc(title), esc(body))
+		cmd = exec.Command("powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script)
+	default:
 		cmd = exec.Command("notify-send", "-a", "Murrly", title, body)
 	}
 	_ = cmd.Start()
@@ -674,11 +651,17 @@ func desktopNotify(title, body string) {
 // openPath opens a file (config or log) in the user's default handler.
 // macOS: `open path` lets LaunchServices pick the registered handler.
 // Linux: `xdg-open` does the same via the freedesktop standard.
+// Windows: `cmd /c start` hands off to the shell's file association.
 func openPath(path string) {
 	var cmd *exec.Cmd
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		cmd = exec.Command("open", path)
-	} else {
+	case "windows":
+		// The empty first argument is start's window-title parameter; the
+		// path is then treated as the target rather than the title.
+		cmd = exec.Command("cmd", "/c", "start", "", path)
+	default:
 		cmd = exec.Command("xdg-open", path)
 	}
 	_ = cmd.Start()
