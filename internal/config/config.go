@@ -92,7 +92,7 @@ type OutputConfig struct {
 	ProfanityFilter bool `toml:"profanity_filter"`
 	// ProfanityRemove — when true (and ProfanityFilter is on), obscene words
 	// are cut out entirely (with their clinging punctuation) instead of being
-	// masked with bullets. Off by default; tray "Вырезать, а не маскировать".
+	// masked with bullets. On by default; tray "Вырезать, а не маскировать".
 	ProfanityRemove bool `toml:"profanity_remove"`
 	// ContextInsert — when true (default), the inserted text is adapted
 	// to the cursor's surroundings in the focused field (capitalisation,
@@ -150,7 +150,7 @@ func defaults() Config {
 		// step. Too short and the focused app reads the restored (old) clipboard
 		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip
 		// tolerates lower values.
-		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ContextInsert: true},
+		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ProfanityRemove: true, ContextInsert: true},
 	}
 }
 
