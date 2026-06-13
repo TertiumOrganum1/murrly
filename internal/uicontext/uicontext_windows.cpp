@@ -215,11 +215,77 @@ static bool looksEmptyOrPlaceholder(IUIAutomationElement* el, IUIAutomationTextP
 	return empty;
 }
 
+// Scintilla messages (Notepad++). These take integer params and return an
+// integer, so SendMessage delivers them across processes without marshaling.
+enum {
+	SCI_GETLENGTH = 2006,
+	SCI_GETCHARAT = 2007,
+	SCI_GETSELECTIONSTART = 2143,
+	SCI_GETSELECTIONEND = 2145,
+	SCI_POSITIONBEFORE = 2417,
+	SCI_POSITIONAFTER = 2418,
+};
+
+// sciDecode reads the bytes in [a, b) one at a time via SCI_GETCHARAT and
+// decodes them as a single UTF-8 code point (Scintilla stores UTF-8 and
+// indexes by byte; POSITIONBEFORE/AFTER give whole-character boundaries).
+static int sciDecode(HWND h, LRESULT a, LRESULT b) {
+	int nb = (int)(b - a);
+	if (nb < 1) return 0;
+	if (nb > 4) nb = 4;
+	unsigned char by[4] = {0};
+	for (int i = 0; i < nb; i++) {
+		by[i] = (unsigned char)(SendMessageW(h, SCI_GETCHARAT, (WPARAM)(a + i), 0) & 0xFF);
+	}
+	if (nb == 1) return by[0];
+	if (nb == 2) return ((by[0] & 0x1F) << 6) | (by[1] & 0x3F);
+	if (nb == 3) return ((by[0] & 0x0F) << 12) | ((by[1] & 0x3F) << 6) | (by[2] & 0x3F);
+	return ((by[0] & 0x07) << 18) | ((by[1] & 0x3F) << 12) | ((by[2] & 0x3F) << 6) | (by[3] & 0x3F);
+}
+
+// captureFromScintilla reads the caret context from a Scintilla control
+// (Notepad++) using only single-character SCI_* reads around the caret — never
+// the whole document.
+static int captureFromScintilla(HWND h, MurUICtx* out) {
+	LRESULT len = SendMessageW(h, SCI_GETLENGTH, 0, 0);
+	LRESULT selStart = SendMessageW(h, SCI_GETSELECTIONSTART, 0, 0);
+	LRESULT selEnd = SendMessageW(h, SCI_GETSELECTIONEND, 0, 0);
+
+	out->hasContext = 1;
+	out->rightKnown = 1;
+
+	LRESULT p = selStart;
+	for (int guard = 0; guard < 64 && p > 0; guard++) {
+		LRESULT prev = SendMessageW(h, SCI_POSITIONBEFORE, (WPARAM)p, 0);
+		if (prev < 0 || prev >= p) break;
+		int r = sciDecode(h, prev, p);
+		if (r == ' ' || r == '\t') {
+			out->spaceBefore = 1;
+			p = prev;
+			continue;
+		}
+		out->preceding = (r == '\n' || r == '\r') ? '\n' : r;
+		break;
+	}
+	if (out->preceding == 0 && p <= 0) {
+		out->atStart = 1;
+	}
+
+	if (selEnd >= len) {
+		out->atEnd = 1;
+	} else {
+		LRESULT next = SendMessageW(h, SCI_POSITIONAFTER, (WPARAM)selEnd, 0);
+		if (next > selEnd) out->following = sciDecode(h, selEnd, next);
+	}
+	setDbg(out, L"scintilla");
+	return 1;
+}
+
 // captureFromEditControl is the fallback when the focused control exposes no
 // UIA TextPattern — classic Win32 EDIT / RichEdit fields (e.g. Notepad on
-// Windows 10). It reads the caret and text directly with EM_GETSEL /
-// WM_GETTEXT (standard messages the OS marshals across processes) and fills
-// the same Context fields the UIA path would. Returns 1 on success.
+// Windows 10) and Scintilla (Notepad++). It reads only the caret context
+// directly from the control and fills the same Context fields the UIA path
+// would. Returns 1 on success.
 static int captureFromEditControl(MurUICtx* out) {
 	HWND fg = GetForegroundWindow();
 	GUITHREADINFO gti;
@@ -237,6 +303,9 @@ static int captureFromEditControl(MurUICtx* out) {
 	GetClassNameW(h, cls, 63);
 	std::wstring clsStr(cls), low;
 	for (wchar_t c : clsStr) low += (wchar_t)towlower(c);
+	if (low.find(L"scintilla") != std::wstring::npos) {
+		return captureFromScintilla(h, out);
+	}
 	if (low != L"edit" && low.find(L"richedit") == std::wstring::npos) {
 		setDbg(out, L"edit-fallback: focused class='" + clsStr + L"' (unsupported)");
 		return 0; // not a classic edit control
