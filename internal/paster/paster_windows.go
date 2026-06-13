@@ -16,6 +16,14 @@ import (
 // literal "v" instead of pasting. Mirrors the Linux paster's settle delay.
 const pasteSettleDelay = 300 * time.Millisecond
 
+// pasteConsumeDelay holds AFTER Ctrl+V so the target window actually reads the
+// clipboard before the caller restores the previous contents. On Windows the
+// clipboard is a one-shot copy (unlike X11, where the owner serves paste
+// requests on demand), so restoring too early makes a slow app — especially
+// Electron/Chromium — paste the OLD clipboard instead of the dictation. This
+// blocks Paste() until the read has almost certainly happened.
+const pasteConsumeDelay = 400 * time.Millisecond
+
 const (
 	inputKeyboard   = 1
 	keyeventfKeyUp  = 0x0002
@@ -66,5 +74,8 @@ func (p *Paster) Paste() error {
 	if int(n) != len(events) {
 		return fmt.Errorf("paster: SendInput injected %d/%d events: %v", n, len(events), err)
 	}
+	// Let the target consume the paste before the caller restores the old
+	// clipboard, so a slow app doesn't paste the previous contents.
+	time.Sleep(pasteConsumeDelay)
 	return nil
 }
