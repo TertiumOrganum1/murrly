@@ -215,6 +215,73 @@ static bool looksEmptyOrPlaceholder(IUIAutomationElement* el, IUIAutomationTextP
 	return empty;
 }
 
+// captureFromEditControl is the fallback when the focused control exposes no
+// UIA TextPattern — classic Win32 EDIT / RichEdit fields (e.g. Notepad on
+// Windows 10). It reads the caret and text directly with EM_GETSEL /
+// WM_GETTEXT (standard messages the OS marshals across processes) and fills
+// the same Context fields the UIA path would. Returns 1 on success.
+static int captureFromEditControl(MurUICtx* out) {
+	HWND fg = GetForegroundWindow();
+	if (!fg) return 0;
+	GUITHREADINFO gti;
+	gti.cbSize = sizeof(gti);
+	if (!GetGUIThreadInfo(GetWindowThreadProcessId(fg, NULL), &gti)) return 0;
+	HWND h = gti.hwndCaret ? gti.hwndCaret : gti.hwndFocus;
+	if (!h) return 0;
+
+	wchar_t cls[64] = {0};
+	GetClassNameW(h, cls, 63);
+	std::wstring low;
+	for (int i = 0; cls[i]; i++) low += (wchar_t)towlower(cls[i]);
+	if (low != L"edit" && low.find(L"richedit") == std::wstring::npos) {
+		return 0; // not a classic edit control
+	}
+
+	DWORD selStart = 0, selEnd = 0;
+	SendMessageW(h, EM_GETSEL, (WPARAM)&selStart, (LPARAM)&selEnd);
+	int len = (int)SendMessageW(h, WM_GETTEXTLENGTH, 0, 0);
+	if (len < 0) len = 0;
+	// Don't pull the whole buffer for a huge document (WM_GETTEXT copies it all
+	// across the process boundary). Past this size we skip the fallback and let
+	// the text paste through unchanged rather than stall the insert.
+	if (len > 65536) {
+		setDbg(out, L"edit-control too large, skipped");
+		return 0;
+	}
+	std::wstring buf((size_t)len + 1, L'\0');
+	int got = (int)SendMessageW(h, WM_GETTEXT, (WPARAM)(len + 1), (LPARAM)&buf[0]);
+	if (got < 0) got = 0;
+	buf.resize((size_t)got);
+
+	int n = (int)buf.size();
+	int s = (int)selStart, e = (int)selEnd;
+	if (s < 0) s = 0;
+	if (s > n) s = n;
+	if (e < 0) e = 0;
+	if (e > n) e = n;
+
+	out->hasContext = 1;
+	out->rightKnown = 1;
+	int i = s;
+	while (i > 0 && (buf[i - 1] == L' ' || buf[i - 1] == L'\t')) {
+		i--;
+		out->spaceBefore = 1;
+	}
+	if (i == 0) {
+		out->atStart = 1;
+	} else {
+		wchar_t c = buf[i - 1];
+		out->preceding = (c == L'\n' || c == L'\r') ? '\n' : (int)c;
+	}
+	if (e >= n) {
+		out->atEnd = 1;
+	} else {
+		out->following = (int)buf[e];
+	}
+	setDbg(out, L"edit-control class='" + std::wstring(cls) + L"'");
+	return 1;
+}
+
 extern "C" int mur_uictx_capture(MurUICtx* out) {
 	ZeroMemory(out, sizeof(*out));
 
@@ -246,7 +313,12 @@ extern "C" int mur_uictx_capture(MurUICtx* out) {
 	}
 	out->stage = 3;
 	if (FAILED(el->GetCurrentPattern(UIA_TextPatternId, &unk)) || unk == NULL) {
-		goto cleanup; // not a text control — pass the dictation through unchanged
+		// No UIA TextPattern (classic Win32 EDIT/RichEdit, e.g. Notepad on
+		// Windows 10). Fall back to reading the control directly.
+		if (captureFromEditControl(out)) {
+			result = 1;
+		}
+		goto cleanup; // otherwise pass the dictation through unchanged
 	}
 	out->stage = 4;
 	if (FAILED(unk->QueryInterface(kIID_IUIAutomationTextPattern, (void**)&tp)) || tp == NULL) {
