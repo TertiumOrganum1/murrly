@@ -45,7 +45,7 @@ var (
 // any punctuation glued to it after ("это, блядь, всё" -> "это, всё";
 // "да блядь!" -> "да").
 var (
-	removeRe           = regexp.MustCompile(`\s*\x{E000}\p{P}*`)
+	removeRe           = regexp.MustCompile(`\s*[,;:]?\s*\x{E000}[,;:]*`)
 	multiSpaceRe       = regexp.MustCompile(`[ \t]{2,}`)
 	spaceBeforePunctRe = regexp.MustCompile(` +([,.;:!?…])`)
 )
