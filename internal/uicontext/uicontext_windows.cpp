@@ -58,8 +58,13 @@ static bool looksEmptyOrPlaceholder(IUIAutomationElement* el, IUIAutomationTextP
 			}
 			if (val) SysFreeString(val);
 			vp->Release();
-			vunk->Release();
-			return empty; // trust ValuePattern when present
+			if (empty) {
+				vunk->Release();
+				return true; // empty value is a strong "empty" signal
+			}
+			// A non-empty value is NOT a reliable "has content" signal for
+			// contenteditables (they can report placeholder text), so fall
+			// through to the document / name checks below.
 		}
 		vunk->Release();
 	}
