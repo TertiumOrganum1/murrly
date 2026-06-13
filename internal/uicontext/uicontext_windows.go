@@ -53,6 +53,9 @@ func Capture() Context {
 		if why == "" {
 			why = "no text focus"
 		}
+		if dbg := decodeDbg(&c); dbg != "" {
+			return Context{Status: fmt.Sprintf("windows-uia: %s [%s]", why, dbg)}
+		}
 		return Context{Status: fmt.Sprintf("windows-uia: %s", why)}
 	}
 	return Context{

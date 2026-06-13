@@ -222,63 +222,81 @@ static bool looksEmptyOrPlaceholder(IUIAutomationElement* el, IUIAutomationTextP
 // the same Context fields the UIA path would. Returns 1 on success.
 static int captureFromEditControl(MurUICtx* out) {
 	HWND fg = GetForegroundWindow();
-	if (!fg) return 0;
 	GUITHREADINFO gti;
 	gti.cbSize = sizeof(gti);
-	if (!GetGUIThreadInfo(GetWindowThreadProcessId(fg, NULL), &gti)) return 0;
-	HWND h = gti.hwndCaret ? gti.hwndCaret : gti.hwndFocus;
-	if (!h) return 0;
+	HWND h = NULL;
+	if (fg && GetGUIThreadInfo(GetWindowThreadProcessId(fg, NULL), &gti)) {
+		h = gti.hwndCaret ? gti.hwndCaret : gti.hwndFocus;
+	}
+	if (!h) {
+		setDbg(out, L"edit-fallback: no focus/caret hwnd");
+		return 0;
+	}
 
 	wchar_t cls[64] = {0};
 	GetClassNameW(h, cls, 63);
-	std::wstring low;
-	for (int i = 0; cls[i]; i++) low += (wchar_t)towlower(cls[i]);
+	std::wstring clsStr(cls), low;
+	for (wchar_t c : clsStr) low += (wchar_t)towlower(c);
 	if (low != L"edit" && low.find(L"richedit") == std::wstring::npos) {
+		setDbg(out, L"edit-fallback: focused class='" + clsStr + L"' (unsupported)");
 		return 0; // not a classic edit control
 	}
 
+	// Read ONLY the caret's line, never the whole document — these fields can
+	// hold tens of thousands of characters. EM_GETLINE copies one line into a
+	// bounded buffer; we only need the character on each side of the caret.
 	DWORD selStart = 0, selEnd = 0;
 	SendMessageW(h, EM_GETSEL, (WPARAM)&selStart, (LPARAM)&selEnd);
-	int len = (int)SendMessageW(h, WM_GETTEXTLENGTH, 0, 0);
-	if (len < 0) len = 0;
-	// Don't pull the whole buffer for a huge document (WM_GETTEXT copies it all
-	// across the process boundary). Past this size we skip the fallback and let
-	// the text paste through unchanged rather than stall the insert.
-	if (len > 65536) {
-		setDbg(out, L"edit-control too large, skipped");
+	LRESULT line = SendMessageW(h, EM_LINEFROMCHAR, (WPARAM)selStart, 0);
+	LRESULT lineStart = SendMessageW(h, EM_LINEINDEX, (WPARAM)line, 0);
+	LRESULT lineCount = SendMessageW(h, EM_GETLINECOUNT, 0, 0);
+
+	const int kMaxLine = 4096;
+	wchar_t lbuf[kMaxLine];
+	((WORD*)lbuf)[0] = (WORD)kMaxLine; // EM_GETLINE wants the buffer size (chars) in the first word
+	int got = (int)SendMessageW(h, EM_GETLINE, (WPARAM)line, (LPARAM)lbuf);
+	if (got < 0) got = 0;
+	if (got > kMaxLine) got = kMaxLine;
+	std::wstring lineText(lbuf, (size_t)got);
+
+	int n = (int)lineText.size();
+	int off = (int)selStart - (int)lineStart;  // caret offset within the line
+	int offEnd = (int)selEnd - (int)lineStart;
+	if (off < 0) off = 0;
+	if (off > n) {
+		// caret past the read window (a line longer than kMaxLine) — don't guess
+		setDbg(out, L"edit-control class='" + clsStr + L"' caret beyond read window");
 		return 0;
 	}
-	std::wstring buf((size_t)len + 1, L'\0');
-	int got = (int)SendMessageW(h, WM_GETTEXT, (WPARAM)(len + 1), (LPARAM)&buf[0]);
-	if (got < 0) got = 0;
-	buf.resize((size_t)got);
-
-	int n = (int)buf.size();
-	int s = (int)selStart, e = (int)selEnd;
-	if (s < 0) s = 0;
-	if (s > n) s = n;
-	if (e < 0) e = 0;
-	if (e > n) e = n;
+	if (offEnd < 0) offEnd = 0;
+	if (offEnd > n) offEnd = n;
 
 	out->hasContext = 1;
 	out->rightKnown = 1;
-	int i = s;
-	while (i > 0 && (buf[i - 1] == L' ' || buf[i - 1] == L'\t')) {
+	int i = off;
+	while (i > 0 && (lineText[i - 1] == L' ' || lineText[i - 1] == L'\t')) {
 		i--;
 		out->spaceBefore = 1;
 	}
 	if (i == 0) {
-		out->atStart = 1;
+		if (line <= 0) {
+			out->atStart = 1; // very start of the field
+		} else {
+			out->preceding = '\n'; // start of a line (paragraph), more above
+		}
 	} else {
-		wchar_t c = buf[i - 1];
-		out->preceding = (c == L'\n' || c == L'\r') ? '\n' : (int)c;
+		out->preceding = (int)lineText[i - 1];
 	}
-	if (e >= n) {
-		out->atEnd = 1;
+	if (offEnd >= n) {
+		if (line >= lineCount - 1) {
+			out->atEnd = 1; // end of the field
+		} else {
+			out->following = '\n'; // end of line, more below
+		}
 	} else {
-		out->following = (int)buf[e];
+		out->following = (int)lineText[offEnd];
 	}
-	setDbg(out, L"edit-control class='" + std::wstring(cls) + L"'");
+	setDbg(out, L"edit-control class='" + clsStr + L"' line-read");
 	return 1;
 }
 
