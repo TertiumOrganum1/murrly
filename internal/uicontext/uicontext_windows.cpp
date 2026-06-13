@@ -76,9 +76,26 @@ static bool looksEmptyOrPlaceholder(IUIAutomationElement* el, IUIAutomationTextP
 	}
 	BSTR docText = NULL;
 	doc->GetText(512, &docText);
+
+	// Placeholder text (the empty-field hint in web/Electron editors) is
+	// read-only; real typed content is not. If the whole document range reads
+	// as read-only, the field is effectively empty and just showing its
+	// placeholder — treat it as a fresh start. UIA_IsReadOnlyAttributeId =
+	// 40015; the value is VT_BOOL (VARIANT_TRUE when read-only), or the
+	// reserved "mixed" object when the range isn't uniform (left as false).
+	bool readOnly = false;
+	VARIANT v;
+	VariantInit(&v);
+	if (SUCCEEDED(doc->GetAttributeValue(40015, &v))) {
+		if (v.vt == VT_BOOL && v.boolVal != VARIANT_FALSE) {
+			readOnly = true;
+		}
+	}
+	VariantClear(&v);
 	doc->Release();
+
 	if (docText == NULL) {
-		return false;
+		return readOnly;
 	}
 	UINT len = SysStringLen(docText);
 	std::wstring trimmed = trimWide(docText, len);
@@ -87,7 +104,7 @@ static bool looksEmptyOrPlaceholder(IUIAutomationElement* el, IUIAutomationTextP
 		if (docText[i] == 0xFFFC) hasFFFC = true;
 	}
 	bool result = false;
-	if (trimmed.empty() || hasFFFC) {
+	if (trimmed.empty() || hasFFFC || readOnly) {
 		result = true;
 	} else {
 		BSTR name = NULL, help = NULL;
