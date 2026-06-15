@@ -6,37 +6,38 @@
 //  1. the desktop's toolkit-accessibility gsettings key — Qt apps
 //     (konsole, doublecmd, …) start their AT-SPI bridge only when
 //     org.a11y.Status.IsEnabled is true at app launch, and the desktop
-//     daemon keeps that bus property synced to this key;
-//  2. VS Code's editor.accessibilitySupport=on — Chromium/Electron
-//     keeps its accessibility tree off until told a screen reader
-//     exists, and this setting is the supported per-app way to force
-//     it (the global ScreenReaderEnabled flag is NOT used: Mint
-//     auto-launches the Orca screen reader on it).
+//     daemon keeps that bus property synced to this key.
 //
-// GTK apps and Telegram Desktop need nothing. The tray's "Контекстная
-// вставка" item surfaces Check/Apply to the user.
+// We deliberately do NOT touch VS Code's editor.accessibilitySupport on
+// Linux: turning it on makes the Claude Code chat input expose an
+// unreliable AT-SPI tree (a placeholder embed plus a second, text-bearing
+// focused entry), so Capture reads the wrong element and mangles inserts.
+// With the setting off the chat is a single opaque placeholder, which the
+// uicontext detector cleanly treats as "unreadable" → passthrough (correct
+// capital + terminator). GTK apps, Qt apps and Telegram Desktop work via
+// the gsettings flag alone. The tray's "Контекстная вставка" item surfaces
+// Check/Apply to the user.
 package a11ysetup
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 )
 
-// Status reports which prerequisites are in place.
+// Status reports which prerequisites are in place. VSCodeFound/VSCode are
+// retained for the cross-platform struct shape (Windows uses them) but stay
+// false on Linux — we no longer manage the VS Code setting here.
 type Status struct {
 	// ToolkitA11y — the gsettings toolkit-accessibility key is on.
 	ToolkitA11y bool
-	// VSCodeFound — a VS Code user profile exists on this machine.
+	// VSCodeFound — a VS Code user profile exists (unused on Linux).
 	VSCodeFound bool
-	// VSCode — editor.accessibilitySupport is "on" in its settings.
-	// Meaningless when VSCodeFound is false.
+	// VSCode — editor.accessibilitySupport is "on" (unused on Linux).
 	VSCode bool
 }
 
-// Ready is true when everything that exists on this machine is set up.
+// Ready is true when everything Linux manages (the gsettings flag) is set.
 func (s Status) Ready() bool {
 	return s.ToolkitA11y && (!s.VSCodeFound || s.VSCode)
 }
@@ -62,15 +63,8 @@ func Check() Status {
 		st.ToolkitA11y = strings.TrimSpace(string(out)) == "true"
 		break
 	}
-	path, err := vscodeSettingsPath()
-	if err == nil && path != "" {
-		st.VSCodeFound = true
-		if raw, rerr := os.ReadFile(path); rerr == nil {
-			st.VSCode = vscodeAccessibilityOn(raw)
-		}
-		// A profile dir without settings.json still counts as found —
-		// Apply will create the file.
-	}
+	// VS Code is intentionally NOT probed/managed on Linux — see the package
+	// doc. VSCodeFound stays false so Ready() keys off the gsettings flag only.
 	return st
 }
 
@@ -105,44 +99,8 @@ func Apply() (Status, []string, error) {
 		}
 	}
 
-	if st.VSCodeFound && !st.VSCode {
-		if err := patchVSCodeSettingsFile(); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			msgs = append(msgs, "VS Code: не получилось обновить settings.json — добавьте вручную: \"editor.accessibilitySupport\": \"on\".")
-		} else {
-			st.VSCode = true
-			msgs = append(msgs, "VS Code настроен (нужен его перезапуск).")
-		}
-	}
-
 	if len(msgs) == 0 {
 		msgs = append(msgs, "Всё уже настроено.")
 	}
 	return st, msgs, firstErr
-}
-
-// vscodeSettingsPath returns the user settings.json of the standard
-// VS Code install, or "" when no profile dir exists.
-func vscodeSettingsPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".config", "Code", "User")
-	if _, err := os.Stat(dir); err != nil {
-		return "", nil
-	}
-	return filepath.Join(dir, "settings.json"), nil
-}
-
-// patchVSCodeSettingsFile forces editor.accessibilitySupport on in the
-// Linux VS Code user settings (shared patch logic in a11ysetup_vscode.go).
-func patchVSCodeSettingsFile() error {
-	path, err := vscodeSettingsPath()
-	if err != nil || path == "" {
-		return fmt.Errorf("vscode settings path: %w", err)
-	}
-	return patchVSCodeFileAt(path)
 }

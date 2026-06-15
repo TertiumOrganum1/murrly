@@ -24,11 +24,30 @@ var pendingUICtx struct {
 	at time.Time
 }
 
+// captureWithTimeout runs uicontext.Capture under a HARD outer deadline.
+// Capture already bounds its own D-Bus calls, but connecting to the a11y
+// bus (address lookup + dial) is not itself guarded, and a wedged bus there
+// would block the insert forever — leaving the tray stuck on "transcribing"
+// because insertText never returns to set Idle. On overrun we abandon the
+// (leaked) goroutine and treat the field as unreadable → text passes through
+// untouched. Normal captures return in well under 100 ms, so no added
+// latency in the common case.
+func captureWithTimeout(d time.Duration) uicontext.Context {
+	ch := make(chan uicontext.Context, 1)
+	go func() { ch <- uicontext.Capture() }()
+	select {
+	case c := <-ch:
+		return c
+	case <-time.After(d):
+		return uicontext.Context{Status: "capture-timeout"}
+	}
+}
+
 func stashUIContext() {
 	if !uictxActive {
 		return
 	}
-	c := uicontext.Capture()
+	c := captureWithTimeout(1500 * time.Millisecond)
 	pendingUICtx.mu.Lock()
 	pendingUICtx.c, pendingUICtx.ok, pendingUICtx.at = c, true, time.Now()
 	pendingUICtx.mu.Unlock()
@@ -62,7 +81,7 @@ func takeUIContext() (uicontext.Context, bool) {
 func adjustTextForContext(text string) string {
 	c, ok := takeUIContext()
 	if !ok {
-		c = uicontext.Capture()
+		c = captureWithTimeout(1500 * time.Millisecond)
 	}
 	out := uicontext.Apply(text, c)
 	if out != text {
