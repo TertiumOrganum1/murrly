@@ -139,10 +139,26 @@ func TestApplyRules(t *testing.T) {
 			want: " вставка",
 		},
 		{
-			name: "mid-sentence at end of field: bare tail",
+			// Caret at the very end of the field after a letter (e.g. the
+			// sentence's own period was deleted and text is appended): lower-case
+			// and lead-space like a mid-sentence insert, but KEEP the phrase's
+			// terminator — it now ends the sentence — dropping only the blank.
+			name: "mid-sentence at end of field keeps terminator",
 			text: "Вставка. ",
 			ctx:  Context{HasContext: true, Preceding: 'а', RightKnown: true, AtEnd: true},
-			want: " вставка",
+			want: " вставка.",
+		},
+		{
+			name: "after comma at end of field keeps terminator",
+			text: "Можно сказать. ",
+			ctx:  Context{HasContext: true, Preceding: ',', RightKnown: true, AtEnd: true},
+			want: " можно сказать.",
+		},
+		{
+			name: "exclamation at end of field kept (not stripped)",
+			text: "Вот это да! ",
+			ctx:  Context{HasContext: true, Preceding: 'а', RightKnown: true, AtEnd: true},
+			want: " вот это да!",
 		},
 		{
 			name: "space already left of caret, word further left: lowercase, no extra space",

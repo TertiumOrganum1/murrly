@@ -34,7 +34,9 @@ const (
 	// tailStrip — mid-sentence insertion: strip ALL trailing
 	// punctuation ("." / "..." / "…" / "!" / "?" / combinations) plus
 	// blanks, then re-add a single space only if a word follows
-	// immediately.
+	// immediately. Exception: when nothing follows (caret at the end of
+	// the field) the phrase ends the sentence, so its terminator is kept
+	// (only the trailing blank is dropped, like tailKeep).
 	tailStrip
 )
 
@@ -127,6 +129,15 @@ func Apply(text string, ctx Context) string {
 
 	switch tail {
 	case tailStrip:
+		if ctx.RightKnown && ctx.AtEnd {
+			// Nothing follows the caret — the inserted phrase IS the end of
+			// the sentence, so it must keep its own terminator. (Stripping it
+			// here is what left "…отцы и деды" with no period when appending
+			// to the end of a field.) Drop only the trailing blank, exactly
+			// like tailKeep; the head still gets lower-cased / lead-spaced.
+			out = strings.TrimRight(out, " \t")
+			break
+		}
 		stripped := strings.TrimRightFunc(out, func(r rune) bool {
 			return unicode.IsSpace(r) || unicode.IsPunct(r)
 		})
