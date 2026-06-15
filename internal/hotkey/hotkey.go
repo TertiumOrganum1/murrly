@@ -103,6 +103,13 @@ func NewWithCtrlAlt(key string) (*Listener, error) {
 	return newListener(key, C.ControlMask|C.Mod1Mask)
 }
 
+// NewWithShift creates a Listener bound to Shift+<key>. Used for the
+// "force mid-sentence insert" push-to-talk variant (Shift+F12) — a
+// separate grab from the bare key, like the Ctrl variants above.
+func NewWithShift(key string) (*Listener, error) {
+	return newListener(key, C.ShiftMask)
+}
+
 func newListener(key string, modifier C.uint) (*Listener, error) {
 	sym, ok := x11Keysyms[strings.ToLower(strings.TrimSpace(key))]
 	if !ok {

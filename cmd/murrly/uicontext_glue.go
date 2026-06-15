@@ -73,6 +73,16 @@ func takeUIContext() (uicontext.Context, bool) {
 	return pendingUICtx.c, true
 }
 
+// adjustTextForcedMid is the app.Config.AdjustTextForced hook (Shift+F12):
+// apply the mid-sentence transform unconditionally, with NO field reading —
+// decapitalise the first letter, prepend one space, strip the phrase's
+// terminal punctuation. Pure and platform-neutral (no Capture / AT-SPI).
+func adjustTextForcedMid(text string) string {
+	out := uicontext.Apply(text, uicontext.Context{HasContext: true, ForceMid: true})
+	log.Printf("uicontext: forced-mid (Shift+F12): %q -> %q", text, out)
+	return out
+}
+
 // adjustTextForContext is the app.Config.AdjustText hook: read the
 // focused field around the insertion point and fit the transcription
 // to it (uicontext.Apply's rules). Runs on the App goroutine right

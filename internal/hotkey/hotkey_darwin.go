@@ -66,6 +66,12 @@ func NewWithCtrlAlt(key string) (*Listener, error) {
 	return newModified(key, gohotkey.ModCtrl|gohotkey.ModOption)
 }
 
+// NewWithShift creates a Listener bound to Shift+<key> on macOS. Used for
+// the "force mid-sentence insert" push-to-talk variant (Shift+F12).
+func NewWithShift(key string) (*Listener, error) {
+	return newModified(key, gohotkey.ModShift)
+}
+
 func newModified(key string, mod gohotkey.Modifier) (*Listener, error) {
 	k, ok := keyMap[strings.ToLower(strings.TrimSpace(key))]
 	if !ok {

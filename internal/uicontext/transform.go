@@ -79,6 +79,14 @@ func Apply(text string, ctx Context) string {
 	tail := tailNone
 
 	switch {
+	case ctx.ForceMid:
+		// Unconditional mid-sentence insert (Shift+F12): no field was read,
+		// so always lower-case, always lead with one space, strip the
+		// phrase's terminator. RightKnown is false here, so tailStrip drops
+		// the terminator without trying to manage a trailing space.
+		lowercase = true
+		leadSpace = !ctx.SpaceBefore
+		tail = tailStrip
 	case ctx.AtStart, ctx.Preceding == '\n':
 		capitalize = true
 		tail = tailKeep

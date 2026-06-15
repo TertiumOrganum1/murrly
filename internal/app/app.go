@@ -50,6 +50,14 @@ const (
 	// EventReprocessNemotron is Ctrl+Break: re-run the last PCM through both
 	// engines and insert the best Nemotron variant (Ctrl+F12 → best Whisper).
 	EventReprocessNemotron
+	// EventKeyDownForceMid / EventKeyUpForceMid mirror EventKeyDown/Up but
+	// FORCE the mid-sentence insert transform (Shift+F12): the recognised
+	// text is decapitalised, gets a single leading space and its terminal
+	// punctuation stripped, with no field reading at all. For when the user
+	// knows they're slipping text into the middle of a phrase and doesn't
+	// want the context heuristics to guess.
+	EventKeyDownForceMid
+	EventKeyUpForceMid
 )
 
 type Recorder interface {
@@ -144,6 +152,12 @@ type Config struct {
 	// leading whitespace / terminator. Returning the input unchanged
 	// is a valid no-op (and the default when AdjustText is nil).
 	AdjustText func(string) string
+	// AdjustTextForced is the Shift+F12 variant of AdjustText: it applies
+	// the mid-sentence transform unconditionally (decapitalise, leading
+	// space, strip terminator) without reading the focused field. Called
+	// instead of AdjustText for recordings started by EventKeyDownForceMid.
+	// nil → falls back to AdjustText.
+	AdjustTextForced func(string) string
 	// Notify shows a transient desktop notification (title, body). Used for
 	// the silent-mic case — a NON-error condition that must not raise the red
 	// error icon. nil → no notification.
@@ -212,6 +226,12 @@ type App struct {
 	// picks which model's top variant lands in the window. Touched only on
 	// the App goroutine — no sync needed.
 	preferNemotron bool
+	// forceMid is true for the current recording/insert when it was started
+	// by Shift+F12 (EventKeyDownForceMid): insertText then uses
+	// AdjustTextForced (unconditional mid-sentence transform) instead of the
+	// context-reading AdjustText. Set on the force keydown, cleared on every
+	// other keydown / reprocess / picker entry. App goroutine only.
+	forceMid bool
 	// varMu guards lastVariants and varGen. lastVariants is appended both
 	// from the App goroutine (the engine whose result is inserted) AND from a
 	// background Nemotron goroutine on the F12 path, so it needs a lock.
@@ -404,6 +424,18 @@ func (a *App) handle(ev Event) {
 		switch ev {
 		case EventKeyDown:
 			a.preferNemotron = false
+			a.forceMid = false
+			if err := a.cfg.Recorder.Start(); err != nil {
+				log.Printf("recorder.Start: %v", err)
+				a.setState(StateError)
+				return
+			}
+			a.setState(StateRecording)
+		case EventKeyDownForceMid:
+			// Shift+F12: same Whisper recording path as F12, but the insert
+			// is forced through the mid-sentence transform.
+			a.preferNemotron = false
+			a.forceMid = true
 			if err := a.cfg.Recorder.Start(); err != nil {
 				log.Printf("recorder.Start: %v", err)
 				a.setState(StateError)
@@ -421,18 +453,22 @@ func (a *App) handle(ev Event) {
 				return
 			}
 			a.preferNemotron = true
+			a.forceMid = false
 			a.setState(StateRecording)
 		case EventReprocess:
 			a.preferNemotron = false
+			a.forceMid = false
 			a.reprocess()
 		case EventReprocessNemotron:
 			a.preferNemotron = true
+			a.forceMid = false
 			a.reprocess()
 		case EventPickCandidate:
+			a.forceMid = false
 			a.pickCandidate()
 		}
 	case StateRecording:
-		if ev == EventKeyUp || ev == EventKeyUpNemotron {
+		if ev == EventKeyUp || ev == EventKeyUpNemotron || ev == EventKeyUpForceMid {
 			a.finish()
 		}
 		// EventReprocess while recording is intentionally ignored
@@ -734,7 +770,9 @@ func (a *App) insertText(text string) error {
 	if a.cfg.OnTranscript != nil {
 		a.cfg.OnTranscript(text)
 	}
-	if a.cfg.AdjustText != nil {
+	if a.forceMid && a.cfg.AdjustTextForced != nil {
+		text = a.cfg.AdjustTextForced(text)
+	} else if a.cfg.AdjustText != nil {
 		text = a.cfg.AdjustText(text)
 	}
 	// Censor обсценную лексику at the very last step before it lands in the

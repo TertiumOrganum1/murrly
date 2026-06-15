@@ -448,6 +448,10 @@ func main() {
 		appCfg.AdjustText = adjustTextForContext
 		uictxActive = true
 	}
+	// Shift+F12 forces the mid-sentence transform on every platform and
+	// regardless of the context_insert auto-mode — it reads no field, so it
+	// always works (decapitalise, leading space, strip terminator).
+	appCfg.AdjustTextForced = adjustTextForcedMid
 	// Setup item: Linux applies the AT-SPI prerequisites (gsettings + VS Code);
 	// Windows applies the VS Code editor.accessibilitySupport flag that
 	// Electron/Chromium need to expose their UIA tree. macOS leaves it unwired.
@@ -511,6 +515,26 @@ func main() {
 			}
 		}
 	}()
+
+	// Shift+<hotkey> (Shift+F12) — push-to-talk that FORCES the mid-sentence
+	// insert transform (decapitalise, leading space, strip terminator), no
+	// field reading. Separate grab, like the Ctrl variants below; non-fatal
+	// registration.
+	if forceMidHk, err := hotkey.NewWithShift(cfg.Hotkey.Key); err != nil {
+		log.Printf("force-mid hotkey: %v", err)
+	} else {
+		go forceMidHk.Start()
+		go func() {
+			for e := range forceMidHk.Events() {
+				switch e {
+				case hotkey.EventDown:
+					events <- app.EventKeyDownForceMid
+				case hotkey.EventUp:
+					events <- app.EventKeyUpForceMid
+				}
+			}
+		}()
+	}
 
 	// Ctrl+<hotkey> triggers manual reprocess. Separate Listener because
 	// X11 routes by exact modifier state — sharing a grab with the

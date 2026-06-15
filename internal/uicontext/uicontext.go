@@ -27,6 +27,14 @@ package uicontext
 // Following/AtEnd.
 type Context struct {
 	HasContext bool
+	// ForceMid forces the mid-sentence transform unconditionally,
+	// bypassing all field reading and heuristics: lower-case the first
+	// letter, prepend a single leading space, strip the phrase's own
+	// terminal punctuation. Set by the Shift+F12 hotkey when the user
+	// KNOWS they're slipping text into the middle of a sentence and
+	// doesn't want Capture to guess. Takes priority over every other
+	// field below.
+	ForceMid bool
 	// AtStart is true when nothing (not even blanks) precedes the
 	// insertion point — empty field, caret at offset 0, or the whole
 	// content selected for replacement.
