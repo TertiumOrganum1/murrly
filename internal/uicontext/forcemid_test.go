@@ -10,11 +10,11 @@ func TestApplyForceMid(t *testing.T) {
 		text string
 		want string
 	}{
-		{"decapitalise + lead space + strip period", "Вставка в середину. ", " вставка в середину"},
-		{"strip ellipsis", "Текст… ", " текст"},
-		{"strip exclamation+question", "Да?! ", " да"},
-		{"already lowercase stays", "слово. ", " слово"},
-		{"digit start: no case change, lead space, strip", "100 рублей. ", " 100 рублей"},
+		{"decapitalise, spaces both sides, strip period", "Вставка в середину. ", " вставка в середину "},
+		{"strip ellipsis", "Текст… ", " текст "},
+		{"strip exclamation+question", "Да?! ", " да "},
+		{"already lowercase stays", "слово. ", " слово "},
+		{"digit start: no case change, spaces, strip", "100 рублей. ", " 100 рублей "},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -26,7 +26,7 @@ func TestApplyForceMid(t *testing.T) {
 	}
 
 	// ForceMid must win even if other fields are set.
-	if got := Apply("Текст. ", Context{HasContext: true, ForceMid: true, AtStart: true}); got != " текст" {
-		t.Fatalf("ForceMid priority: got %q, want %q", got, " текст")
+	if got := Apply("Текст. ", Context{HasContext: true, ForceMid: true, AtStart: true}); got != " текст " {
+		t.Fatalf("ForceMid priority: got %q, want %q", got, " текст ")
 	}
 }

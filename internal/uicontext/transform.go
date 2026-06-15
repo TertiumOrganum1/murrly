@@ -167,5 +167,14 @@ func Apply(text string, ctx Context) string {
 	if leadSpace && !strings.HasPrefix(out, " ") {
 		out = " " + out
 	}
+	// Forced mid-insert (Shift+F12) reads no field, so it can't know whether
+	// a word follows — surround the phrase with single spaces on BOTH sides
+	// so it never jams into the neighbour on the right. (Auto mid-sentence
+	// adds the trailing space only when it sees a following word; forced mode
+	// has no such signal, so it always does.) The user fixes the rare double
+	// space by hand.
+	if ctx.ForceMid && !strings.HasSuffix(out, " ") {
+		out += " "
+	}
 	return out
 }
