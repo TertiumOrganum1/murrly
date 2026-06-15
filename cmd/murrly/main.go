@@ -93,6 +93,9 @@ func main() {
 	// default) keeps the OS default input — so a change of the system default
 	// is the only thing that switches the mic.
 	recorder.SetInputDevice(cfg.Audio.Device)
+	// Prefer a wireless mic when the user opted in — re-evaluated each
+	// recording so plugging/unplugging it just works.
+	recorder.SetPreferWireless(cfg.Audio.PreferWireless)
 
 	// Surface the mic permission prompt right at startup by momentarily
 	// opening (and immediately closing) a default input stream. Only
@@ -274,6 +277,16 @@ func main() {
 				log.Printf("pad-silence persist: %v", err)
 			}
 			cfg.Whisper.PadSilence = newState
+			return newState
+		},
+		IsPreferWireless: func() bool { return cfg.Audio.PreferWireless },
+		OnTogglePreferWireless: func() bool {
+			newState := !cfg.Audio.PreferWireless
+			recorder.SetPreferWireless(newState)
+			if err := persistPreferWireless(cfgPath, cfg, newState); err != nil {
+				log.Printf("prefer-wireless persist: %v", err)
+			}
+			cfg.Audio.PreferWireless = newState
 			return newState
 		},
 		IsProfanityOn: ruprofane.Enabled,

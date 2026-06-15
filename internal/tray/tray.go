@@ -178,6 +178,14 @@ func (t *Tray) onReady() {
 	padSilenceChecked := t.actions.IsPadSilenceOn != nil && t.actions.IsPadSilenceOn()
 	padSilenceItem := systray.AddMenuItemCheckbox("Тишина по краям", "Добавлять 1 с тишины с обеих сторон каждой записи перед Whisper", padSilenceChecked)
 
+	// Prefer-wireless-mic toggle. Off by default; when on, each recording
+	// picks an input whose name contains "wireless", else the default mic.
+	var preferWirelessItem *systray.MenuItem
+	if t.actions.OnTogglePreferWireless != nil {
+		pwChecked := t.actions.IsPreferWireless != nil && t.actions.IsPreferWireless()
+		preferWirelessItem = systray.AddMenuItemCheckbox("Беспроводной микрофон", "Предпочитать вход с «wireless» в названии; если такого нет — обычный/системный микрофон", pwChecked)
+	}
+
 	profanityChecked := t.actions.IsProfanityOn != nil && t.actions.IsProfanityOn()
 	profanityItem := systray.AddMenuItemCheckbox("Фильтр лексики", "Маскировать обсценную лексику символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
 
@@ -313,6 +321,21 @@ func (t *Tray) onReady() {
 				if t.actions.OnSetupContextInsert() {
 					mi.SetTitle(contextInsertTitle(true))
 					mi.Disable()
+				}
+			}
+		}()
+	}
+	// Prefer-wireless-mic toggle — conditional item, so its own goroutine.
+	if preferWirelessItem != nil {
+		mi := preferWirelessItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnTogglePreferWireless != nil {
+					if t.actions.OnTogglePreferWireless() {
+						mi.Check()
+					} else {
+						mi.Uncheck()
+					}
 				}
 			}
 		}()

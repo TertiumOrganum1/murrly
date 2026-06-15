@@ -73,6 +73,14 @@ type Actions struct {
 	OnTogglePadSilence func() bool
 	IsPadSilenceOn     func() bool
 
+	// Prefer-wireless-mic toggle ("Беспроводной микрофон"). Same shape as
+	// autostart: OnTogglePreferWireless flips the live state (each recording
+	// prefers a "wireless"-named input, else the pinned/default device) and
+	// returns the new value; IsPreferWireless reports the initial value at
+	// render time. All platforms (the recorder is PortAudio everywhere).
+	OnTogglePreferWireless func() bool
+	IsPreferWireless       func() bool
+
 	// Profanity filter toggle ("Фильтр лексики"). Same shape as autostart:
 	// OnToggleProfanity flips the live state (mask obscene words at display
 	// and insertion) and returns the new value; IsProfanityOn reports the

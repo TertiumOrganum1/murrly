@@ -28,6 +28,11 @@ type HotkeyConfig struct {
 type AudioConfig struct {
 	Device     string `toml:"device"`
 	SampleRate int    `toml:"sample_rate"`
+	// PreferWireless — when true, each recording prefers an input device
+	// whose name contains "wireless" (case-insensitive), falling back to
+	// the pinned/default device when none is present. OFF by default;
+	// flipped live from the tray "Беспроводной микрофон" toggle.
+	PreferWireless bool `toml:"prefer_wireless"`
 }
 
 type WhisperConfig struct {
@@ -122,7 +127,7 @@ type NemotronConfig struct {
 func defaults() Config {
 	return Config{
 		Hotkey: HotkeyConfig{Key: "F12", Mode: "push_to_talk"},
-		Audio:  AudioConfig{Device: "", SampleRate: 16000},
+		Audio:  AudioConfig{Device: "", SampleRate: 16000, PreferWireless: false},
 		Whisper: WhisperConfig{
 			// Model = "" means "use the default ggml-large-v3-turbo.bin".
 			// That matches what scripts/bootstrap-{ubuntu,mac}.sh download

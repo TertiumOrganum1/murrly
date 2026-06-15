@@ -5,6 +5,10 @@ mode = "push_to_talk"
 [audio]
 device = ""
 sample_rate = 16000
+# Предпочитать беспроводной микрофон: при записи выбирается вход, в имени
+# которого есть "wireless" (регистр не важен), иначе — заданный/системный.
+# ВЫКЛ по умолчанию; включается тумблером в трее «Беспроводной микрофон».
+prefer_wireless = false
 
 [whisper]
 model_path = "~/.local/share/murrly/models/ggml-large-v3-turbo.bin"
