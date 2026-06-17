@@ -62,9 +62,10 @@ const (
 	// goes through untransformed, same as before this feature.
 	captureTimeout = 700 * time.Millisecond
 
-	// stateFocused / stateEditable are ATSPI_STATE_* enum values; the
-	// match rule and the editable check use them as bit positions in
-	// the state set's first word.
+	// stateActive / stateFocused / stateEditable are ATSPI_STATE_* enum
+	// values used as bit positions in the state set's first word.
+	// stateActive marks the active toplevel window.
+	stateActive   = 1
 	stateFocused  = 12
 	stateEditable = 7
 
@@ -169,13 +170,23 @@ func (c *atspiClient) capture(pid uint32) Context {
 		return Context{Status: fmt.Sprintf("no-a11y-app(pid=%d)", pid)}
 	}
 
+	// Scope the focus search to the ACTIVE window first, so a stale
+	// STATE_FOCUSED input in another window/panel (the user keeps several
+	// Claude Code panels open) can't be picked over the live one. The
+	// Collection iface may live only on the app root, so this is best-effort:
+	// try each active frame, and fall back to the app root when a frame
+	// yields nothing (no Collection there, or no focus inside it).
 	var matches []ref
 	for _, app := range apps {
-		m, err := c.focusedIn(app)
-		if err != nil {
-			continue // app without Collection support — skip
+		roots := append(c.activeFrames(app), app) // active frames first, app root last
+		for _, root := range roots {
+			m, err := c.focusedIn(root)
+			if err != nil || len(m) == 0 {
+				continue
+			}
+			matches = append(matches, m...)
+			break // most-scoped root that had focus wins; skip app-wide dupes
 		}
-		matches = append(matches, m...)
 	}
 	if len(matches) == 0 {
 		return Context{Status: "no-focused-element"}
@@ -640,11 +651,35 @@ func (c *atspiClient) hasText(r ref) bool {
 }
 
 func (c *atspiClient) isEditable(r ref) bool {
+	return c.hasState(r, stateEditable)
+}
+
+// hasState reports whether the accessible has the given ATSPI_STATE bit set
+// in the first word of its state set.
+func (c *atspiClient) hasState(r ref, bit uint) bool {
 	var words []uint32
 	if err := c.call(r, ifaceAccessible+".GetState").Store(&words); err != nil || len(words) == 0 {
 		return false
 	}
-	return words[0]&(1<<stateEditable) != 0
+	return words[0]&(1<<bit) != 0
+}
+
+// activeFrames returns the app's toplevel children that carry STATE_ACTIVE —
+// i.e. the focused window(s). Used to scope the focus search to the window
+// the user is actually in, so stale STATE_FOCUSED widgets in OTHER windows
+// (e.g. a second Claude Code panel) don't get picked instead of the live one.
+func (c *atspiClient) activeFrames(app ref) []ref {
+	var children []ref
+	if err := c.call(app, ifaceAccessible+".GetChildren").Store(&children); err != nil {
+		return nil
+	}
+	var active []ref
+	for _, ch := range children {
+		if c.hasState(ch, stateActive) {
+			active = append(active, ch)
+		}
+	}
+	return active
 }
 
 func (c *atspiClient) childAt(r ref, i int) (ref, error) {
