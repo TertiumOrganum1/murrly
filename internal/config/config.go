@@ -28,11 +28,6 @@ type HotkeyConfig struct {
 type AudioConfig struct {
 	Device     string `toml:"device"`
 	SampleRate int    `toml:"sample_rate"`
-	// PreferWireless — when true, each recording prefers an input device
-	// whose name contains "wireless" (case-insensitive), falling back to
-	// the pinned/default device when none is present. OFF by default;
-	// flipped live from the tray "Беспроводной микрофон" toggle.
-	PreferWireless bool `toml:"prefer_wireless"`
 }
 
 type WhisperConfig struct {
@@ -105,6 +100,10 @@ type OutputConfig struct {
 	// the AX API on macOS. Power-user kill switch: set false if some
 	// app's accessibility tree misleads the transform.
 	ContextInsert bool `toml:"context_insert"`
+	// RecentTranscripts — how many of the latest recognized phrases the tray
+	// menu keeps as clickable copy slots. Default 20; clamped to [1,50] on
+	// load. Applies on all platforms.
+	RecentTranscripts int `toml:"recent_transcripts"`
 }
 
 // NemotronConfig configures the second engine (Linux-only; the Break key).
@@ -127,7 +126,7 @@ type NemotronConfig struct {
 func defaults() Config {
 	return Config{
 		Hotkey: HotkeyConfig{Key: "F12", Mode: "push_to_talk"},
-		Audio:  AudioConfig{Device: "", SampleRate: 16000, PreferWireless: false},
+		Audio:  AudioConfig{Device: "", SampleRate: 16000},
 		Whisper: WhisperConfig{
 			// Model = "" means "use the default ggml-large-v3-turbo.bin".
 			// That matches what scripts/bootstrap-{ubuntu,mac}.sh download
@@ -155,7 +154,7 @@ func defaults() Config {
 		// step. Too short and the focused app reads the restored (old) clipboard
 		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip
 		// tolerates lower values.
-		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ProfanityRemove: true, ContextInsert: true},
+		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ProfanityRemove: true, ContextInsert: true, RecentTranscripts: 20},
 	}
 }
 
@@ -207,6 +206,18 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Whisper.MultiInferenceCount > 8 {
 		cfg.Whisper.MultiInferenceCount = 8
+	}
+
+	// Recent-transcript slots: 0 (unset / old config) → default 20; clamp to
+	// a sane [1,50] so the menu doesn't balloon.
+	if cfg.Output.RecentTranscripts == 0 {
+		cfg.Output.RecentTranscripts = 20
+	}
+	if cfg.Output.RecentTranscripts < 1 {
+		cfg.Output.RecentTranscripts = 1
+	}
+	if cfg.Output.RecentTranscripts > 50 {
+		cfg.Output.RecentTranscripts = 50
 	}
 
 	expandPaths(&cfg)

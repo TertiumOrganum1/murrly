@@ -13,6 +13,9 @@ package menuactions
 type Actions struct {
 	// Recent transcripts. Index 0 = most recent, up to N-1.
 	OnCopyTranscript func(index int)
+	// RecentCount is how many recent-transcript copy slots the menu renders
+	// (config output.recent_transcripts, default 20). 0 → renderer default.
+	RecentCount int
 
 	// Whisper model picker. ModelLabels seed the submenu; clicking
 	// item i fires OnPickModel(i). ActiveModelIndex tells the renderer
@@ -72,14 +75,6 @@ type Actions struct {
 	// IsPadSilenceOn reports the initial value at render time.
 	OnTogglePadSilence func() bool
 	IsPadSilenceOn     func() bool
-
-	// Prefer-wireless-mic toggle ("Беспроводной микрофон"). Same shape as
-	// autostart: OnTogglePreferWireless flips the live state (each recording
-	// prefers a "wireless"-named input, else the pinned/default device) and
-	// returns the new value; IsPreferWireless reports the initial value at
-	// render time. All platforms (the recorder is PortAudio everywhere).
-	OnTogglePreferWireless func() bool
-	IsPreferWireless       func() bool
 
 	// Profanity filter toggle ("Фильтр лексики"). Same shape as autostart:
 	// OnToggleProfanity flips the live state (mask obscene words at display

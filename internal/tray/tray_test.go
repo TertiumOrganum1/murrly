@@ -15,14 +15,3 @@ func TestTranscriptPreviewTruncatesRunes(t *testing.T) {
 		t.Fatalf("preview = %q", got)
 	}
 }
-
-func TestTranscriptMenuTitle(t *testing.T) {
-	got := transcriptMenuTitle(0, "recognized text")
-	if got != "recognized text" {
-		t.Fatalf("title = %q, want %q", got, "recognized text")
-	}
-	gotEmpty := transcriptMenuTitle(1, "")
-	if gotEmpty != "— (предыдущее)" {
-		t.Fatalf("empty title for slot 1 = %q", gotEmpty)
-	}
-}

@@ -5,10 +5,6 @@ mode = "push_to_talk"
 [audio]
 device = ""
 sample_rate = 16000
-# Предпочитать беспроводной микрофон: при записи выбирается вход, в имени
-# которого есть "wireless" (регистр не важен), иначе — заданный/системный.
-# ВЫКЛ по умолчанию; включается тумблером в трее «Беспроводной микрофон».
-prefer_wireless = false
 
 [whisper]
 model_path = "~/.local/share/murrly/models/ggml-large-v3-turbo.bin"
@@ -49,3 +45,6 @@ profanity_filter = true
 # (capitalisation, leading space, terminal punctuation) — Linux/AT-SPI.
 # The tray item "Контекстная вставка" applies the per-app prerequisites.
 context_insert = true
+# Сколько последних распознанных фраз держать в меню трея кликабельными
+# слотами для копирования. По умолчанию 20; зажимается в [1,50].
+recent_transcripts = 20

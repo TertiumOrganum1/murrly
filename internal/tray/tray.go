@@ -109,14 +109,25 @@ func (t *Tray) onReady() {
 	}
 
 	// Transcript slots first — by far the most common reason to open the
-	// menu is to recopy a recent recognition, so it lives at the top.
-	copyLatestItem := systray.AddMenuItem("— (последнее)", "Скопировать в буфер обмена")
-	copyPreviousItem := systray.AddMenuItem("— (предыдущее)", "Скопировать в буфер обмена")
-	copyOlderItem := systray.AddMenuItem("— (ещё раньше)", "Скопировать в буфер обмена")
-	copyItems := []*systray.MenuItem{copyLatestItem, copyPreviousItem, copyOlderItem}
-	for i, item := range copyItems {
-		item.SetTitle(transcriptMenuTitle(i, ""))
-		item.Disable()
+	// menu is to recopy a recent recognition, so it lives at the top. The
+	// count comes from config (output.recent_transcripts, default 20). Empty
+	// slots are hidden so a fresh start isn't a wall of "—" rows; each fills
+	// and shows as recognitions arrive (updateTranscriptMenuItems).
+	recentCount := t.actions.RecentCount
+	if recentCount <= 0 {
+		recentCount = 3
+	}
+	copyItems := make([]*systray.MenuItem, recentCount)
+	for i := range copyItems {
+		it := systray.AddMenuItem("—", "Скопировать в буфер обмена")
+		it.Hide()
+		copyItems[i] = it
+		idx := i
+		go func() {
+			for range it.ClickedCh {
+				t.copyTranscript(idx)
+			}
+		}()
 	}
 
 	// "Reprocess last" — re-runs the most recent recording through
@@ -177,14 +188,6 @@ func (t *Tray) onReady() {
 
 	padSilenceChecked := t.actions.IsPadSilenceOn != nil && t.actions.IsPadSilenceOn()
 	padSilenceItem := systray.AddMenuItemCheckbox("Тишина по краям", "Добавлять 1 с тишины с обеих сторон каждой записи перед Whisper", padSilenceChecked)
-
-	// Prefer-wireless-mic toggle. Off by default; when on, each recording
-	// picks an input whose name contains "wireless", else the default mic.
-	var preferWirelessItem *systray.MenuItem
-	if t.actions.OnTogglePreferWireless != nil {
-		pwChecked := t.actions.IsPreferWireless != nil && t.actions.IsPreferWireless()
-		preferWirelessItem = systray.AddMenuItemCheckbox("Беспроводной микрофон", "Предпочитать вход с «wireless» в названии; если такого нет — обычный/системный микрофон", pwChecked)
-	}
 
 	profanityChecked := t.actions.IsProfanityOn != nil && t.actions.IsProfanityOn()
 	profanityItem := systray.AddMenuItemCheckbox("Фильтр лексики", "Маскировать обсценную лексику символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
@@ -325,21 +328,6 @@ func (t *Tray) onReady() {
 			}
 		}()
 	}
-	// Prefer-wireless-mic toggle — conditional item, so its own goroutine.
-	if preferWirelessItem != nil {
-		mi := preferWirelessItem
-		go func() {
-			for range mi.ClickedCh {
-				if t.actions.OnTogglePreferWireless != nil {
-					if t.actions.OnTogglePreferWireless() {
-						mi.Check()
-					} else {
-						mi.Uncheck()
-					}
-				}
-			}
-		}()
-	}
 	// Nemotron enable/disable toggle — flips state + (dis)starts the sidecar
 	// via the callback, re-ticking from the returned value.
 	if nemoToggleItem != nil {
@@ -445,12 +433,6 @@ func (t *Tray) onReady() {
 				if t.actions.OnOpenLog != nil {
 					t.actions.OnOpenLog()
 				}
-			case <-copyLatestItem.ClickedCh:
-				t.copyTranscript(0)
-			case <-copyPreviousItem.ClickedCh:
-				t.copyTranscript(1)
-			case <-copyOlderItem.ClickedCh:
-				t.copyTranscript(2)
 			case <-reprocessItem.ClickedCh:
 				if t.actions.OnReprocess != nil {
 					t.actions.OnReprocess()
@@ -535,36 +517,17 @@ func stateName(s State) string {
 
 func updateTranscriptMenuItems(menuItems []*systray.MenuItem, transcripts []string) {
 	for i, item := range menuItems {
-		text := ""
-		if i < len(transcripts) {
-			text = transcripts[i]
-		}
-		// Censor only the displayed title (toggle-gated, no-op when off);
-		// enable/disable still keys off the real (uncensored) emptiness.
-		item.SetTitle(transcriptMenuTitle(i, ruprofane.Filter(text)))
-		if text == "" {
-			item.Disable()
-		} else {
+		if i < len(transcripts) && transcripts[i] != "" {
+			// Censor only the displayed title (toggle-gated, no-op when off);
+			// the stored phrase stays uncensored.
+			item.SetTitle(transcriptPreview(ruprofane.Filter(transcripts[i]), 56))
 			item.Enable()
+			item.Show()
+		} else {
+			// Empty slot — hide it so the menu shows only real phrases.
+			item.Hide()
 		}
 	}
-}
-
-func transcriptMenuTitle(index int, text string) string {
-	emptyLabels := []string{
-		"— (последнее)",
-		"— (предыдущее)",
-		"— (ещё раньше)",
-	}
-	if text == "" {
-		if index >= 0 && index < len(emptyLabels) {
-			return emptyLabels[index]
-		}
-		return "— (пусто)"
-	}
-	// Show just the transcript fragment — clipboard semantics are obvious
-	// from the menu's context.
-	return transcriptPreview(text, 56)
 }
 
 func transcriptPreview(text string, limit int) string {

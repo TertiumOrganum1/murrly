@@ -20,47 +20,8 @@ const sampleRate = 16000
 // whose name contains it (case-insensitive). Set once at startup.
 var inputDeviceName string
 
-// preferWireless, when true, makes each recording first look for an input
-// device whose name contains "wireless" (case-insensitive) and use it,
-// falling back to the pinned/default device when none is present. Lets a
-// wireless mic win automatically without changing the OS default, and
-// without breaking on machines that have no wireless mic. Toggled live from
-// the tray; read at Start() so connect/disconnect is picked up per recording.
-var preferWireless bool
-
-// wirelessNameHint is the substring that identifies a wireless mic. Vendors
-// name them differently, but "wireless" is near-universal in the label
-// (e.g. "Digital Input (S/PDIF) Wireless Microphone").
-const wirelessNameHint = "wireless"
-
 // SetInputDevice pins the capture device by name substring. Empty = OS default.
 func SetInputDevice(name string) { inputDeviceName = strings.TrimSpace(name) }
-
-// SetPreferWireless flips the prefer-wireless behaviour at runtime (tray
-// toggle). Off by default; the next Start() picks up the new value.
-func SetPreferWireless(on bool) { preferWireless = on }
-
-// openCaptureStream opens the input stream for one recording, honouring (in
-// order): prefer-wireless (when on and a wireless mic exists), the pinned
-// device, then the OS default.
-func openCaptureStream(frame []float32) (*portaudio.Stream, error) {
-	if preferWireless {
-		if dev, err := findInputDevice(wirelessNameHint); err == nil {
-			// Found a wireless mic — but it may be a stereo-only (iec958)
-			// device that won't open mono on this ALSA config. If the open
-			// fails, fall back to the pinned/default mic rather than erroring
-			// the whole recording.
-			if stream, oerr := openDeviceStream(dev, frame); oerr == nil {
-				log.Printf("recorder: preferring wireless input %q [%s]", dev.Name, dev.HostApi.Name)
-				return stream, nil
-			} else {
-				log.Printf("recorder: wireless input %q won't open (%v) — falling back to default", dev.Name, oerr)
-			}
-		}
-		// No wireless mic on this machine — fall through to pin/default.
-	}
-	return openInputStream(frame)
-}
 
 // openInputStream opens a mono 16 kHz input stream on the pinned device, or
 // the system default when none is pinned (or the pinned one isn't found).
@@ -165,7 +126,7 @@ func (r *Recorder) Start() error {
 	r.stopCh = make(chan struct{})
 	r.doneCh = make(chan struct{})
 
-	stream, err := openCaptureStream(r.frame)
+	stream, err := openInputStream(r.frame)
 	if err != nil {
 		return fmt.Errorf("open stream: %w", err)
 	}
