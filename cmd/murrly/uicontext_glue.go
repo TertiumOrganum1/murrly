@@ -94,11 +94,7 @@ func adjustTextForContext(text string) string {
 		c = captureWithTimeout(1500 * time.Millisecond)
 	}
 	out := uicontext.Apply(text, c)
-	if out != text {
-		log.Printf("uicontext: %s preceding=%q space=%v following=%q atEnd=%v: %q -> %q",
-			c.Status, c.Preceding, c.SpaceBefore, c.Following, c.AtEnd, text, out)
-	} else {
-		log.Printf("uicontext: %s (no change)", c.Status)
-	}
+	log.Printf("uicontext: %s atStart=%v preceding=%q space=%v rightKnown=%v following=%q atEnd=%v: %q -> %q",
+		c.Status, c.AtStart, c.Preceding, c.SpaceBefore, c.RightKnown, c.Following, c.AtEnd, text, out)
 	return out
 }
