@@ -524,6 +524,30 @@ func main() {
 		}()
 	}
 
+	// Microsoft Ergonomic keyboard's emoji key (Linux + Windows): the keyboard
+	// sends the chord Ctrl+Shift+(Alt+)Super+Space, so we grab Space with those
+	// modifiers and treat it as an extra push-to-talk, alongside F12. Non-fatal
+	// if the grab is taken. No such key on Mac. (The Office key can't be grabbed
+	// cleanly — its chord is a prefix of the emoji one — so it's left for a
+	// keyd-style remap.)
+	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
+		if emojiHk, err := hotkey.NewWithCtrlShiftSuper("space"); err != nil {
+			log.Printf("emoji-key hotkey: %v", err)
+		} else {
+			go emojiHk.Start()
+			go func() {
+				for e := range emojiHk.Events() {
+					switch e {
+					case hotkey.EventDown:
+						events <- app.EventKeyDown
+					case hotkey.EventUp:
+						events <- app.EventKeyUp
+					}
+				}
+			}()
+		}
+	}
+
 	// Ctrl+<hotkey> triggers manual reprocess. Separate Listener because
 	// X11 routes by exact modifier state — sharing a grab with the
 	// push-to-talk key would lose either the bare or the modified

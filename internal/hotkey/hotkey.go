@@ -71,6 +71,10 @@ var x11Keysyms = map[string]C.KeySym{
 	// Pause/Break — отдельная клавиша для движка Nemotron (Linux-only).
 	"pause": 0xFF13, // XK_Pause
 	"break": 0xFF6B, // XK_Break
+	// space — used by the Microsoft Ergonomic keyboard's emoji key, which the
+	// system expands to the chord Ctrl+Shift+Super+Space; we grab Space with
+	// those modifiers (see NewEmojiChord).
+	"space": 0x0020, // XK_space
 }
 
 type Listener struct {
@@ -108,6 +112,15 @@ func NewWithCtrlAlt(key string) (*Listener, error) {
 // separate grab from the bare key, like the Ctrl variants above.
 func NewWithShift(key string) (*Listener, error) {
 	return newListener(key, C.ShiftMask)
+}
+
+// NewWithCtrlShiftSuper creates a Listener bound to Ctrl+Shift+Super+<key>.
+// The Microsoft Ergonomic keyboard's emoji key is expanded by the system to
+// exactly Ctrl+Shift+Super+Space (Alt is in the chord but doesn't register
+// as an X modifier here), so grabbing Space with these three modifiers turns
+// that key into a Murrly hotkey. Mod4Mask = Super.
+func NewWithCtrlShiftSuper(key string) (*Listener, error) {
+	return newListener(key, C.ControlMask|C.ShiftMask|C.Mod4Mask)
 }
 
 func newListener(key string, modifier C.uint) (*Listener, error) {

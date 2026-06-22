@@ -25,11 +25,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Virtual-key codes for the supported function keys (F1..F15 = 0x70..0x7E).
+// Virtual-key codes for the supported function keys (F1..F15 = 0x70..0x7E),
+// plus space (0x20) for the Microsoft emoji-key chord (see NewWithCtrlShiftSuper).
 var vkMap = map[string]uint16{
 	"f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74,
 	"f6": 0x75, "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79,
 	"f11": 0x7A, "f12": 0x7B, "f13": 0x7C, "f14": 0x7D, "f15": 0x7E,
+	"space": 0x20,
 }
 
 const (
@@ -42,6 +44,8 @@ const (
 	vkControlCode = 0x11
 	vkMenuCode    = 0x12 // Alt
 	vkShiftCode   = 0x10
+	vkLWinCode    = 0x5B
+	vkRWinCode    = 0x5C
 )
 
 var (
@@ -81,6 +85,7 @@ type Listener struct {
 	needCtrl  bool
 	needAlt   bool
 	needShift bool
+	needSuper bool
 	events    chan Event
 	pressed   bool
 
@@ -90,30 +95,41 @@ type Listener struct {
 	once     sync.Once
 }
 
-func New(key string) (*Listener, error) { return newListener(key, false, false, false) }
+func New(key string) (*Listener, error) { return newListener(key, false, false, false, false) }
 
 // NewWithCtrl binds Ctrl+<key> (reprocess / picker). Exact-modifier routing
 // keeps it from colliding with the bare push-to-talk listener.
-func NewWithCtrl(key string) (*Listener, error) { return newListener(key, true, false, false) }
+func NewWithCtrl(key string) (*Listener, error) { return newListener(key, true, false, false, false) }
 
 // NewWithCtrlAlt binds Ctrl+Alt+<key>. Unused on Windows (it backed the
 // Linux-only Nemotron picker) but kept for the cross-platform API.
-func NewWithCtrlAlt(key string) (*Listener, error) { return newListener(key, true, true, false) }
+func NewWithCtrlAlt(key string) (*Listener, error) { return newListener(key, true, true, false, false) }
 
 // NewWithShift binds Shift+<key> (force mid-phrase insert). Shift is an
 // exact-matched modifier here, so the bare listener won't also fire.
-func NewWithShift(key string) (*Listener, error) { return newListener(key, false, false, true) }
+func NewWithShift(key string) (*Listener, error) { return newListener(key, false, false, true, false) }
 
-func newListener(key string, needCtrl, needAlt, needShift bool) (*Listener, error) {
+// NewWithCtrlShiftSuper binds the Microsoft Ergonomic keyboard's emoji key,
+// which the keyboard firmware sends as the chord Ctrl+Shift+Alt+Win+<key>
+// (key = space). All four modifiers are physically down at the space press,
+// so we require them all. Same key as the Linux build, matched to what
+// GetAsyncKeyState sees on Windows.
+func NewWithCtrlShiftSuper(key string) (*Listener, error) {
+	l, err := newListener(key, true, true, true, true)
+	return l, err
+}
+
+func newListener(key string, needCtrl, needAlt, needShift, needSuper bool) (*Listener, error) {
 	vk, ok := vkMap[strings.ToLower(strings.TrimSpace(key))]
 	if !ok {
-		return nil, fmt.Errorf("hotkey: unknown key %q (supported: F1..F15)", key)
+		return nil, fmt.Errorf("hotkey: unknown key %q (supported: F1..F15, space)", key)
 	}
 	return &Listener{
 		vk:        vk,
 		needCtrl:  needCtrl,
 		needAlt:   needAlt,
 		needShift: needShift,
+		needSuper: needSuper,
 		events:    make(chan Event, 8),
 		started:   make(chan struct{}),
 	}, nil
@@ -135,7 +151,9 @@ func (l *Listener) proc(nCode uintptr, wparam uintptr, lparam uintptr) uintptr {
 	if int32(nCode) >= 0 && l.vk == uint16((*kbdLLHookStruct)(unsafe.Pointer(lparam)).vkCode) {
 		switch wparam {
 		case wmKeyDown, wmSysKeyDown:
-			modsOK := keyDown(vkControlCode) == l.needCtrl && keyDown(vkMenuCode) == l.needAlt && keyDown(vkShiftCode) == l.needShift
+			winDown := keyDown(vkLWinCode) || keyDown(vkRWinCode)
+			modsOK := keyDown(vkControlCode) == l.needCtrl && keyDown(vkMenuCode) == l.needAlt &&
+				keyDown(vkShiftCode) == l.needShift && winDown == l.needSuper
 			if modsOK {
 				if !l.pressed {
 					l.pressed = true

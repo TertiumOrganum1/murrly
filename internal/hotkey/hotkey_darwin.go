@@ -72,6 +72,13 @@ func NewWithShift(key string) (*Listener, error) {
 	return newModified(key, gohotkey.ModShift)
 }
 
+// NewWithCtrlShiftSuper exists for cross-platform compilation; the
+// Microsoft-keyboard emoji chord it targets is Linux/X11-specific, so this
+// path isn't wired on macOS (main registers it only on Linux).
+func NewWithCtrlShiftSuper(key string) (*Listener, error) {
+	return newModified(key, gohotkey.ModCtrl|gohotkey.ModShift|gohotkey.ModCmd)
+}
+
 func newModified(key string, mod gohotkey.Modifier) (*Listener, error) {
 	k, ok := keyMap[strings.ToLower(strings.TrimSpace(key))]
 	if !ok {
