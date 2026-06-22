@@ -526,10 +526,10 @@ func main() {
 
 	// Microsoft Ergonomic keyboard's emoji key (Linux + Windows): the keyboard
 	// sends the chord Ctrl+Shift+(Alt+)Super+Space, so we grab Space with those
-	// modifiers and treat it as an extra push-to-talk, alongside F12. Non-fatal
-	// if the grab is taken. No such key on Mac. (The Office key can't be grabbed
-	// cleanly — its chord is a prefix of the emoji one — so it's left for a
-	// keyd-style remap.)
+	// modifiers and treat it as a push-to-talk that FORCES the mid-sentence
+	// insert (same as Shift+F12), not the plain F12 path. Non-fatal if the grab
+	// is taken. No such key on Mac. (The Office key can't be grabbed cleanly —
+	// its chord is a prefix of the emoji one — so it's left for a keyd remap.)
 	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
 		if emojiHk, err := hotkey.NewWithCtrlShiftSuper("space"); err != nil {
 			log.Printf("emoji-key hotkey: %v", err)
@@ -539,9 +539,9 @@ func main() {
 				for e := range emojiHk.Events() {
 					switch e {
 					case hotkey.EventDown:
-						events <- app.EventKeyDown
+						events <- app.EventKeyDownForceMid
 					case hotkey.EventUp:
-						events <- app.EventKeyUp
+						events <- app.EventKeyUpForceMid
 					}
 				}
 			}()
