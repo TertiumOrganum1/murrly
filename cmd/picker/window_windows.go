@@ -67,19 +67,45 @@ func arrangeWindow() {
 
 // watchFocusDismiss exits the process once the foreground window stops being
 // ours, after we've actually held the foreground at least once (so we don't
-// quit before the window is focused). Mirrors the Linux behaviour.
+// quit before the window is focused). Mirrors the Linux behaviour. Once the
+// user has picked a card (picked), we stop watching: the pick handler hands
+// focus back to the editor, which would otherwise look like "clicked away"
+// and cancel the selection.
 func watchFocusDismiss(hwnd uintptr) {
 	seen := false
 	for {
 		time.Sleep(120 * time.Millisecond)
+		if picked.Load() {
+			return
+		}
 		fg, _, _ := getForegroundWindow.Call()
 		if fg == hwnd {
 			seen = true
 			continue
 		}
-		if seen {
+		if seen && !picked.Load() {
 			os.Exit(1) // clicked away — cancel, same as Esc
 		}
+	}
+}
+
+// prevForeground is the window that had focus before the picker showed —
+// the user's editor. Captured at startup, restored when a card is picked.
+var prevForeground uintptr
+
+// notePrevForeground records the foreground window before the picker grabs it.
+// Called at the very top of main(), before the Fyne window exists, so it's
+// still the editor that spawned us (the parent tray is a background process
+// and never took foreground).
+func notePrevForeground() { prevForeground, _, _ = getForegroundWindow.Call() }
+
+// restorePrevForeground hands focus back to the editor. Called from the pick
+// handler while the picker is still the foreground window, so SetForegroundWindow
+// is unrestricted (Windows blocks stealing focus, not giving it away) — unlike
+// the parent tray, which can't reliably reclaim it from a background process.
+func restorePrevForeground() {
+	if prevForeground != 0 {
+		setForegroundWindow.Call(prevForeground)
 	}
 }
 

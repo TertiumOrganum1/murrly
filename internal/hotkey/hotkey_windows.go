@@ -41,6 +41,7 @@ const (
 	wmQuit        = 0x0012
 	vkControlCode = 0x11
 	vkMenuCode    = 0x12 // Alt
+	vkShiftCode   = 0x10
 )
 
 var (
@@ -76,11 +77,12 @@ type msg struct {
 }
 
 type Listener struct {
-	vk       uint16
-	needCtrl bool
-	needAlt  bool
-	events   chan Event
-	pressed  bool
+	vk        uint16
+	needCtrl  bool
+	needAlt   bool
+	needShift bool
+	events    chan Event
+	pressed   bool
 
 	hook     uintptr
 	threadID uint32
@@ -88,27 +90,32 @@ type Listener struct {
 	once     sync.Once
 }
 
-func New(key string) (*Listener, error) { return newListener(key, false, false) }
+func New(key string) (*Listener, error) { return newListener(key, false, false, false) }
 
 // NewWithCtrl binds Ctrl+<key> (reprocess / picker). Exact-modifier routing
 // keeps it from colliding with the bare push-to-talk listener.
-func NewWithCtrl(key string) (*Listener, error) { return newListener(key, true, false) }
+func NewWithCtrl(key string) (*Listener, error) { return newListener(key, true, false, false) }
 
 // NewWithCtrlAlt binds Ctrl+Alt+<key>. Unused on Windows (it backed the
 // Linux-only Nemotron picker) but kept for the cross-platform API.
-func NewWithCtrlAlt(key string) (*Listener, error) { return newListener(key, true, true) }
+func NewWithCtrlAlt(key string) (*Listener, error) { return newListener(key, true, true, false) }
 
-func newListener(key string, needCtrl, needAlt bool) (*Listener, error) {
+// NewWithShift binds Shift+<key> (force mid-phrase insert). Shift is an
+// exact-matched modifier here, so the bare listener won't also fire.
+func NewWithShift(key string) (*Listener, error) { return newListener(key, false, false, true) }
+
+func newListener(key string, needCtrl, needAlt, needShift bool) (*Listener, error) {
 	vk, ok := vkMap[strings.ToLower(strings.TrimSpace(key))]
 	if !ok {
 		return nil, fmt.Errorf("hotkey: unknown key %q (supported: F1..F15)", key)
 	}
 	return &Listener{
-		vk:       vk,
-		needCtrl: needCtrl,
-		needAlt:  needAlt,
-		events:   make(chan Event, 8),
-		started:  make(chan struct{}),
+		vk:        vk,
+		needCtrl:  needCtrl,
+		needAlt:   needAlt,
+		needShift: needShift,
+		events:    make(chan Event, 8),
+		started:   make(chan struct{}),
 	}, nil
 }
 
@@ -128,7 +135,7 @@ func (l *Listener) proc(nCode uintptr, wparam uintptr, lparam uintptr) uintptr {
 	if int32(nCode) >= 0 && l.vk == uint16((*kbdLLHookStruct)(unsafe.Pointer(lparam)).vkCode) {
 		switch wparam {
 		case wmKeyDown, wmSysKeyDown:
-			modsOK := keyDown(vkControlCode) == l.needCtrl && keyDown(vkMenuCode) == l.needAlt
+			modsOK := keyDown(vkControlCode) == l.needCtrl && keyDown(vkMenuCode) == l.needAlt && keyDown(vkShiftCode) == l.needShift
 			if modsOK {
 				if !l.pressed {
 					l.pressed = true

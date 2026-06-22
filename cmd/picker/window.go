@@ -102,6 +102,11 @@ func focusedPID() int {
 	return pid
 }
 
+// Focus restoration is Windows-only; the X11 window manager returns focus to
+// the previously active window when the picker closes. ponytail: no-op here.
+func notePrevForeground()    {}
+func restorePrevForeground() {}
+
 func dbg(format string, args ...any) {
 	if os.Getenv("MURRLY_PICKER_DEBUG") == "" {
 		return

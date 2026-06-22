@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -50,7 +51,16 @@ const gutterSep = "\x1f"
 //go:embed icon.png
 var catIcon []byte
 
+// picked flips true the instant the user clicks a card, so the focus-dismiss
+// watcher won't mistake the deliberate focus hand-back (to the editor) for a
+// click-away cancel.
+var picked atomic.Bool
+
 func main() {
+	// Record the editor that spawned us before we create/show any window, so
+	// the pick handler can hand focus back to it (Windows only; no-op elsewhere).
+	notePrevForeground()
+
 	options, err := readOptions(os.Stdin)
 	if err != nil || len(options) == 0 {
 		os.Exit(1)
@@ -180,7 +190,9 @@ func newPickerWindow(a fyne.App, options []string) fyne.Window {
 		// window and the mouse wheel scrolls the rest when the card is hovered.
 		lines := wrapWords(oneLine(p.text), availWidth, textSize, style)
 		cards = append(cards, newCard(i, p.gutter, gutterWidth, lines, maxCardLines, func(idx int) {
+			picked.Store(true)
 			fmt.Println(idx)
+			restorePrevForeground() // give focus back to the editor before we exit, so the parent's paste lands
 			w.Close()
 		}))
 	}
