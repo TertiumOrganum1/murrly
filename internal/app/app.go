@@ -484,6 +484,11 @@ func (a *App) finish() {
 	// the next recording even if we early-return below (e.g. empty PCM).
 	pref := a.preferNemotron
 	a.preferNemotron = false
+	// forceMid is read by insertText (called synchronously below); reset it on
+	// return so it never survives this recording. Without this, an emoji-key
+	// TAP (sets forceMid=true, then finishes empty with no insert) would leave
+	// the flag set and make the NEXT F12 wrongly force a mid-sentence insert.
+	defer func() { a.forceMid = false }()
 
 	pcm, err := a.cfg.Recorder.Stop()
 	if err != nil {

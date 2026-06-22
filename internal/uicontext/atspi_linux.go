@@ -36,6 +36,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -122,15 +123,95 @@ func getA11yConn() (*dbus.Conn, error) {
 	return conn, nil
 }
 
+// focusTracker remembers the accessible that most recently GAINED keyboard
+// focus, learned from live AT-SPI focus signals. This is the element Ctrl+V
+// will actually hit — unlike Collection.GetMatches(FOCUSED), which in VS Code
+// returns several stale-focused fields at once (the open editor's full-text
+// mirror AND the chat input), with no reliable way to tell which is live.
+// The signal fires exactly when focus moves, so the last one is the truth.
+var focusTracker struct {
+	mu  sync.Mutex
+	ref ref
+	at  time.Time
+	on  bool
+}
+
+func (t *atspiClient) trackedFocus() (ref, bool) {
+	focusTracker.mu.Lock()
+	defer focusTracker.mu.Unlock()
+	if focusTracker.ref.Path == "" || time.Since(focusTracker.at) > 10*time.Minute {
+		return ref{}, false
+	}
+	return focusTracker.ref, true
+}
+
+// ensureFocusTracker starts the background focus-signal listener once.
+func ensureFocusTracker() {
+	focusTracker.mu.Lock()
+	already := focusTracker.on
+	focusTracker.on = true
+	focusTracker.mu.Unlock()
+	if !already {
+		go focusTrackerLoop()
+	}
+}
+
+// focusTrackerLoop subscribes to AT-SPI focus signals and records the element
+// that last gained focus. Reconnects on error.
+func focusTrackerLoop() {
+	for {
+		if err := focusTrackerRun(); err != nil {
+			time.Sleep(3 * time.Second)
+		}
+	}
+}
+
+func focusTrackerRun() error {
+	session, err := dbus.SessionBus()
+	if err != nil {
+		return err
+	}
+	var addr string
+	if err := session.Object("org.a11y.Bus", "/org/a11y/bus").
+		Call("org.a11y.Bus.GetAddress", 0).Store(&addr); err != nil {
+		return err
+	}
+	conn, err := dbus.Connect(addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	// Only focus-state changes (arg0 = "focused").
+	conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0,
+		"type='signal',interface='org.a11y.atspi.Event.Object',member='StateChanged',arg0='focused'")
+	ch := make(chan *dbus.Signal, 64)
+	conn.Signal(ch)
+	for sig := range ch {
+		if len(sig.Body) < 2 {
+			continue
+		}
+		state, _ := sig.Body[0].(string)
+		gained, _ := sig.Body[1].(int32)
+		if state == "focused" && gained == 1 {
+			focusTracker.mu.Lock()
+			focusTracker.ref = ref{Name: sig.Sender, Path: sig.Path}
+			focusTracker.at = time.Now()
+			focusTracker.mu.Unlock()
+		}
+	}
+	return fmt.Errorf("focus signal channel closed")
+}
+
 // Capture reads the focused UI element via AT-SPI and returns the
 // insertion-point surroundings. Never blocks past captureTimeout;
 // every failure mode degrades to HasContext=false with a diagnostic
 // Status, so the caller's Apply becomes a no-op.
 func Capture() Context {
+	ensureFocusTracker()
 	ctx, cancel := context.WithTimeout(context.Background(), captureTimeout)
 	defer cancel()
 
-	pid, err := activeWindowPID(ctx)
+	pid, rect, err := activeWindow(ctx)
 	if err != nil {
 		return Context{Status: "no-active-window: " + err.Error()}
 	}
@@ -139,21 +220,59 @@ func Capture() Context {
 		return Context{Status: "no-a11y-bus: " + err.Error()}
 	}
 	c := &atspiClient{ctx: ctx, conn: conn}
-	return c.capture(pid)
+	return c.capture(pid, rect)
 }
 
-// activeWindowPID asks X11 (via xdotool, already a paster dependency)
-// which process owns the focused toplevel window.
-func activeWindowPID(ctx context.Context) (uint32, error) {
-	out, err := exec.CommandContext(ctx, "xdotool", "getactivewindow", "getwindowpid").Output()
+// winRect is the active window's screen rectangle (px). w==0 means unknown.
+type winRect struct{ x, y, w, h int }
+
+func (r winRect) known() bool { return r.w > 0 && r.h > 0 }
+
+// contains reports whether the screen point (px,py) is inside the rect.
+func (r winRect) contains(px, py int) bool {
+	return px >= r.x && px < r.x+r.w && py >= r.y && py < r.y+r.h
+}
+
+// activeWindow asks X11 (via xdotool, already a paster dependency) for the
+// focused toplevel window's owning PID and its screen geometry. The geometry
+// lets capture() pick the focused field that actually lives in the window the
+// user is in — Electron (VS Code) doesn't set STATE_ACTIVE on its frames, and
+// with several windows/panels open the app-wide focus search otherwise grabs
+// a stale input from a different window.
+func activeWindow(ctx context.Context) (uint32, winRect, error) {
+	out, err := exec.CommandContext(ctx, "xdotool", "getactivewindow",
+		"getwindowpid", "getwindowgeometry", "--shell").Output()
 	if err != nil {
-		return 0, err
+		return 0, winRect{}, err
 	}
-	pid, err := strconv.ParseUint(strings.TrimSpace(string(out)), 10, 32)
-	if err != nil {
-		return 0, err
+	var pid uint32
+	var r winRect
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "":
+			continue
+		case strings.HasPrefix(line, "X="):
+			r.x, _ = strconv.Atoi(line[2:])
+		case strings.HasPrefix(line, "Y="):
+			r.y, _ = strconv.Atoi(line[2:])
+		case strings.HasPrefix(line, "WIDTH="):
+			r.w, _ = strconv.Atoi(line[6:])
+		case strings.HasPrefix(line, "HEIGHT="):
+			r.h, _ = strconv.Atoi(line[7:])
+		case strings.HasPrefix(line, "WINDOW="):
+			// ignore
+		default:
+			// The bare getwindowpid line (first numeric line).
+			if p, perr := strconv.ParseUint(line, 10, 32); perr == nil && pid == 0 {
+				pid = uint32(p)
+			}
+		}
 	}
-	return uint32(pid), nil
+	if pid == 0 {
+		return 0, winRect{}, fmt.Errorf("no pid in xdotool output")
+	}
+	return pid, r, nil
 }
 
 type atspiClient struct {
@@ -161,7 +280,7 @@ type atspiClient struct {
 	conn *dbus.Conn
 }
 
-func (c *atspiClient) capture(pid uint32) Context {
+func (c *atspiClient) capture(pid uint32, rect winRect) Context {
 	apps, err := c.appsForPID(pid)
 	if err != nil {
 		return Context{Status: "desktop-scan: " + err.Error()}
@@ -170,44 +289,95 @@ func (c *atspiClient) capture(pid uint32) Context {
 		return Context{Status: fmt.Sprintf("no-a11y-app(pid=%d)", pid)}
 	}
 
-	// Scope the focus search to the ACTIVE window first, so a stale
-	// STATE_FOCUSED input in another window/panel (the user keeps several
-	// Claude Code panels open) can't be picked over the live one. The
-	// Collection iface may live only on the app root, so this is best-effort:
-	// try each active frame, and fall back to the app root when a frame
-	// yields nothing (no Collection there, or no focus inside it).
+	// Collect every focused element across the app(s). VS Code keeps a
+	// STATE_FOCUSED input in EACH open window/panel, so this can return
+	// several — the geometry pass below picks the one in the active window.
 	var matches []ref
 	for _, app := range apps {
-		roots := append(c.activeFrames(app), app) // active frames first, app root last
-		for _, root := range roots {
-			m, err := c.focusedIn(root)
-			if err != nil || len(m) == 0 {
-				continue
-			}
-			matches = append(matches, m...)
-			break // most-scoped root that had focus wins; skip app-wide dupes
+		m, err := c.focusedIn(app)
+		if err != nil {
+			continue // no Collection support on this root — skip
 		}
+		matches = append(matches, m...)
 	}
 	if len(matches) == 0 {
 		return Context{Status: "no-focused-element"}
 	}
 
-	// Editable fields first: the duplicate/companion matches (e.g. the
-	// containing document) read worse than the input itself.
-	ordered := make([]ref, 0, len(matches))
-	var rest []ref
-	for _, m := range matches {
-		if c.isEditable(m) {
-			ordered = append(ordered, m)
-		} else {
-			rest = append(rest, m)
+	// Best signal first: the element that LAST gained focus (from live AT-SPI
+	// focus signals) is the one keystrokes — and our paste — actually hit. Use
+	// it when it belongs to the active window's process and sits inside the
+	// active window's rect (guards against a stale focus in another window of
+	// the same process). This is what resolves VS Code marking both the editor
+	// mirror and the chat input "focused" at once.
+	if f, ok := c.trackedFocus(); ok {
+		for _, app := range apps {
+			if app.Name != f.Name {
+				continue
+			}
+			inRect := true
+			if rect.known() {
+				if x, y, w, h, ok := c.extents(f); ok && w > 0 && h > 0 {
+					inRect = rect.contains(x+w/2, y+h/2)
+				}
+			}
+			if inRect {
+				// The tracked element IS the paste target. Its reading wins
+				// outright — even when it's unreadable/empty (opaque chat
+				// placeholder → HasContext=false → passthrough, i.e. keep the
+				// phrase's own capital + terminator). Falling through to other
+				// "focused" fields here is exactly what made an empty chat read
+				// the editor's mirror and mangle the insert.
+				cx, _ := c.readContext(f)
+				return cx
+			}
+			break
 		}
 	}
-	ordered = append(ordered, rest...)
+
+	// Fallback (no usable tracked focus): order candidates so the best is first:
+	//   1. inside the active window's screen rect (the field the user is in),
+	//   2. editable,
+	//   3. fewest characters.
+	// (1) drops stale focus from OTHER windows (Electron doesn't mark its
+	// active frame, so geometry is the only signal). (3) breaks the tie WITHIN
+	// the active window: VS Code keeps BOTH the chat input (a small box) and
+	// the open editor's full-document text mirror (thousands of chars) marked
+	// focused — the user dictates into the small input, so prefer it. When
+	// geometry is unknown we fall back to editable-then-fewest-chars.
+	type cand struct {
+		ref      ref
+		inRect   bool
+		editable bool
+		chars    int
+	}
+	cands := make([]cand, 0, len(matches))
+	for _, m := range matches {
+		in := false
+		if rect.known() {
+			if x, y, w, h, ok := c.extents(m); ok && w > 0 && h > 0 {
+				in = rect.contains(x+w/2, y+h/2)
+			}
+		}
+		n, err := c.charCount(m)
+		if err != nil {
+			n = 1 << 30 // unreadable count → sort last
+		}
+		cands = append(cands, cand{ref: m, inRect: in, editable: c.isEditable(m), chars: n})
+	}
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].inRect != cands[j].inRect {
+			return cands[i].inRect // in-rect first
+		}
+		if cands[i].editable != cands[j].editable {
+			return cands[i].editable // then editable first
+		}
+		return cands[i].chars < cands[j].chars // then the smaller field (the input, not the doc mirror)
+	})
 
 	lastStatus := "no-readable-focus"
-	for _, m := range ordered {
-		ctx, status := c.readContext(m)
+	for _, cn := range cands {
+		ctx, status := c.readContext(cn.ref)
 		if ctx.HasContext {
 			return ctx
 		}
@@ -216,6 +386,16 @@ func (c *atspiClient) capture(pid uint32) Context {
 		}
 	}
 	return Context{Status: lastStatus}
+}
+
+// extents returns the on-screen rectangle of an accessible via the Component
+// interface (ATSPI_COORD_TYPE_SCREEN). ok=false when it has no Component.
+func (c *atspiClient) extents(r ref) (x, y, w, h int, ok bool) {
+	var ex struct{ X, Y, W, H int32 }
+	if err := c.call(r, "org.a11y.atspi.Component.GetExtents", uint32(0)).Store(&ex); err != nil {
+		return 0, 0, 0, 0, false
+	}
+	return int(ex.X), int(ex.Y), int(ex.W), int(ex.H), true
 }
 
 // appsForPID returns the a11y-bus application roots owned by pid.
@@ -662,24 +842,6 @@ func (c *atspiClient) hasState(r ref, bit uint) bool {
 		return false
 	}
 	return words[0]&(1<<bit) != 0
-}
-
-// activeFrames returns the app's toplevel children that carry STATE_ACTIVE —
-// i.e. the focused window(s). Used to scope the focus search to the window
-// the user is actually in, so stale STATE_FOCUSED widgets in OTHER windows
-// (e.g. a second Claude Code panel) don't get picked instead of the live one.
-func (c *atspiClient) activeFrames(app ref) []ref {
-	var children []ref
-	if err := c.call(app, ifaceAccessible+".GetChildren").Store(&children); err != nil {
-		return nil
-	}
-	var active []ref
-	for _, ch := range children {
-		if c.hasState(ch, stateActive) {
-			active = append(active, ch)
-		}
-	}
-	return active
 }
 
 func (c *atspiClient) childAt(r ref, i int) (ref, error) {

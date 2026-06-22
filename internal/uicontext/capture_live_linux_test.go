@@ -37,8 +37,8 @@ func liveDiag() string {
 	var b strings.Builder
 	dctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	pid, err := activeWindowPID(dctx)
-	fmt.Fprintf(&b, "active pid: %d err=%v\n", pid, err)
+	pid, rect, err := activeWindow(dctx)
+	fmt.Fprintf(&b, "active pid: %d rect: %+v err=%v\n", pid, rect, err)
 	conn, err := getA11yConn()
 	if err != nil {
 		fmt.Fprintf(&b, "a11y conn: %v\n", err)
@@ -54,8 +54,10 @@ func liveDiag() string {
 			role, _ := c.roleName(m)
 			cnt, cerr := c.charCount(m)
 			caret, kerr := c.caretOffset(m)
-			fmt.Fprintf(&b, "    match %s role=%s chars=%d(%v) caret=%d(%v) editable=%v text=%v\n",
-				m.Path, role, cnt, cerr, caret, kerr, c.isEditable(m), c.hasText(m))
+			ex, ey, ew, eh, eok := c.extents(m)
+			inRect := rect.known() && eok && rect.contains(ex+ew/2, ey+eh/2)
+			fmt.Fprintf(&b, "    match %s role=%s chars=%d(%v) caret=%d(%v) editable=%v text=%v ext=(%d,%d,%d,%d) inRect=%v\n",
+				m.Path, role, cnt, cerr, caret, kerr, c.isEditable(m), c.hasText(m), ex, ey, ew, eh, inRect)
 		}
 	}
 	return b.String()
