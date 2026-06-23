@@ -719,6 +719,14 @@ func (c *atspiClient) precedingAt(node ref, off int) (preceding rune, spaceBefor
 						// An empty paragraph is an empty line above.
 						return '\n', spaceBefore, false, nil
 					case embedTextChild:
+						if !c.isEditable(child) {
+							// Non-editable embedded text is a placeholder / hint
+							// ("Enter message"), not typed content. Skip it so a
+							// field holding only a placeholder reads as empty → a
+							// fresh start, per the general rule (no real letters to
+							// the left ⇒ treat as empty).
+							continue
+						}
 						if depth++; depth > maxDescend {
 							return embedChar, spaceBefore, false, nil
 						}
@@ -740,6 +748,15 @@ func (c *atspiClient) precedingAt(node ref, off int) (preceding rune, spaceBefor
 				}
 				if unicode.IsSpace(ch) {
 					spaceBefore = true
+					continue
+				}
+				if !unicode.IsGraphic(ch) {
+					// Invisible control / format rune (U+FEFF BOM, zero-width
+					// spaces) — Electron inputs pad an empty field with these.
+					// They are not a real preceding character, so skip. The
+					// general rule: if the whole left context collapses to
+					// invisibles + spaces + newlines with no letters, the field
+					// is empty ⇒ fresh start (capitalised).
 					continue
 				}
 				return ch, spaceBefore, false, nil

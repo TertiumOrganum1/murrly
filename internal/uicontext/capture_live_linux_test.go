@@ -273,7 +273,7 @@ func (c *atspiClient) nameOf(r ref) string {
 
 // scanEditable recursively prints every editable Text node under root.
 func (c *atspiClient) scanEditable(b *strings.Builder, node ref, depth int) {
-	if depth > 14 {
+	if depth > 26 {
 		return
 	}
 	if c.hasText(node) && c.isEditable(node) {
@@ -298,7 +298,7 @@ func (c *atspiClient) scanEditable(b *strings.Builder, node ref, depth int) {
 		return
 	}
 	for i, ch := range children {
-		if i >= 40 {
+		if i >= 80 {
 			break
 		}
 		c.scanEditable(b, ch, depth+1)
