@@ -317,7 +317,7 @@ func (c *atspiClient) capture(pid uint32, rect winRect) Context {
 			}
 			inRect := true
 			if rect.known() {
-				if x, y, w, h, ok := c.extents(f); ok && w > 0 && h > 0 {
+				if x, y, w, h, ok := c.extents(f); ok && h > 0 {
 					inRect = rect.contains(x+w/2, y+h/2)
 				}
 			}
@@ -355,7 +355,12 @@ func (c *atspiClient) capture(pid uint32, rect winRect) Context {
 	for _, m := range matches {
 		in := false
 		if rect.known() {
-			if x, y, w, h, ok := c.extents(m); ok && w > 0 && h > 0 {
+			// Only h>0 is required, NOT w>0: VS Code exposes the LIVE editor
+			// line as a zero-WIDTH element (a caret-like sliver), while its
+			// stale full-document mirror keeps a wide rect. Requiring w>0 here
+			// dropped the live field and let the mirror win — the empty-text-
+			// file bug. The live field still has a line's worth of height.
+			if x, y, w, h, ok := c.extents(m); ok && h > 0 {
 				in = rect.contains(x+w/2, y+h/2)
 			}
 		}
@@ -380,6 +385,18 @@ func (c *atspiClient) capture(pid uint32, rect winRect) Context {
 		ctx, status := c.readContext(cn.ref)
 		if ctx.HasContext {
 			return ctx
+		}
+		// An opaque rich editor (the VS Code / Electron / Claude Code chat
+		// input) IS the field the user is in — it just hides its real text
+		// behind an embed placeholder. The sort already put it first (in the
+		// active window's rect, editable, fewest chars), so reaching it here
+		// means it's the paste target: return passthrough (the phrase keeps
+		// its own capital + terminator, i.e. a fresh start) and STOP. Falling
+		// through to the next focused field is exactly what made an empty chat
+		// read the open editor's full-document mirror and mangle the insert as
+		// mid-sentence — the bug this whole geometry pass exists to prevent.
+		if strings.HasPrefix(status, "opaque-editor") {
+			return Context{Status: status}
 		}
 		if status != "" {
 			lastStatus = status
