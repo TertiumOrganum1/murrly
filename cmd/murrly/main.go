@@ -456,6 +456,9 @@ func main() {
 			return st.Ready()
 		}
 	}
+	// eXpress relaunch-with-accessibility (Linux): tray item + startup fix-up.
+	// No-op off Linux or when eXpress isn't installed.
+	wireExpressSetup(actions)
 	// Tray's Nemotron group (status line + restart). No-op off Linux or when
 	// the engine is disabled.
 	wireNemotronStatus(actions, appCfg.Nemotron)

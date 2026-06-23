@@ -120,5 +120,11 @@ type Actions struct {
 	OnOpenMicSettings   func()
 	OnOpenAccessibility func()
 
+	// OnRestartExpress (Linux only) relaunches the eXpress messenger with
+	// --force-renderer-accessibility so its message field exposes an AT-SPI
+	// tree (eXpress rewrites its own autostart, so Murrly relaunching it is the
+	// reliable lever). Nil when eXpress isn't installed → the item is omitted.
+	OnRestartExpress func()
+
 	OnQuit func()
 }

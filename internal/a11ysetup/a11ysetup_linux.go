@@ -21,9 +21,117 @@ package a11ysetup
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
+
+// eXpress (corporate Electron messenger) exposes NO AT-SPI tree for its
+// renderer unless launched with --force-renderer-accessibility, so its message
+// field is unreadable and inserts there can't adapt to context. eXpress
+// rewrites its own autostart .desktop from in-app settings on every launch, so
+// patching launcher files never sticks. Instead Murrly relaunches eXpress with
+// the flag — on demand (tray item) and at Murrly startup if a bare instance is
+// running (EnsureExpressA11y).
+const (
+	expressBin  = "/opt/eXpress/express"
+	expressFlag = "--force-renderer-accessibility"
+)
+
+// ExpressInstalled reports whether the eXpress binary is present.
+func ExpressInstalled() bool {
+	_, err := os.Stat(expressBin)
+	return err == nil
+}
+
+// expressState scans /proc for the main eXpress process (its argv0 is the
+// binary; helper processes carry --type=) and reports whether it's running and
+// whether that launch carried the accessibility flag.
+func expressState() (running, withFlag bool) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return false, false
+	}
+	for _, e := range entries {
+		data, err := os.ReadFile(filepath.Join("/proc", e.Name(), "cmdline"))
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		args := strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
+		if len(args) == 0 || args[0] != expressBin {
+			continue
+		}
+		helper := false
+		for _, a := range args {
+			if strings.HasPrefix(a, "--type=") {
+				helper = true
+			}
+		}
+		if helper {
+			continue // renderer/zygote/gpu child, not the main process
+		}
+		running = true
+		for _, a := range args {
+			if a == expressFlag {
+				return true, true
+			}
+		}
+		return true, false
+	}
+	return false, false
+}
+
+// ExpressReady reports whether the running eXpress already has the flag (so the
+// tray status can show it). True (nothing to do) when eXpress isn't installed.
+func ExpressReady() bool {
+	if !ExpressInstalled() {
+		return true
+	}
+	_, withFlag := expressState()
+	return withFlag
+}
+
+// RestartExpressWithA11y kills any running eXpress and relaunches it DETACHED
+// with --force-renderer-accessibility. eXpress regenerates its own autostart
+// entry from in-app settings, so patching .desktop files never sticks — having
+// Murrly relaunch it is the reliable lever. No-op when eXpress isn't installed.
+func RestartExpressWithA11y() ([]string, error) {
+	if !ExpressInstalled() {
+		return []string{"eXpress не установлен."}, nil
+	}
+	_ = exec.Command("pkill", "-f", expressBin).Run() // ignore "no process"
+	if err := launchExpressDetached(); err != nil {
+		return []string{"Не удалось запустить eXpress с флагом доступности."}, err
+	}
+	return []string{"eXpress перезапущен с флагом доступности."}, nil
+}
+
+// EnsureExpressA11y restarts eXpress with the flag only if it's currently
+// running WITHOUT it — called at Murrly startup so a login-autostarted (bare)
+// eXpress gets replaced by a flagged one, without disturbing an already-flagged
+// instance or force-launching eXpress when the user hasn't opened it.
+func EnsureExpressA11y() {
+	if !ExpressInstalled() {
+		return
+	}
+	if running, withFlag := expressState(); running && !withFlag {
+		_, _ = RestartExpressWithA11y()
+	}
+}
+
+// launchExpressDetached starts eXpress in its own session so it outlives
+// Murrly, mirroring scripts/start-linux.sh's setsid use.
+func launchExpressDetached() error {
+	if path, err := exec.LookPath("setsid"); err == nil {
+		return exec.Command(path, "-f", expressBin, expressFlag).Start()
+	}
+	cmd := exec.Command(expressBin, expressFlag)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
 
 // Status reports which prerequisites are in place. VSCodeFound/VSCode are
 // retained for the cross-platform struct shape (Windows uses them) but stay

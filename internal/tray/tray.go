@@ -222,6 +222,15 @@ func (t *Tray) onReady() {
 		}
 	}
 
+	// eXpress relaunch-with-accessibility (Linux, shown only when eXpress is
+	// installed). eXpress rewrites its own autostart from in-app settings, so a
+	// button that relaunches it with --force-renderer-accessibility is the
+	// reliable way to make its message field readable for context-insert.
+	var expressItem *systray.MenuItem
+	if t.actions.OnRestartExpress != nil {
+		expressItem = systray.AddMenuItem("Перезапустить eXpress (доступность)", "Перезапустить eXpress с флагом доступности, чтобы вставка читала его поле")
+	}
+
 	// Nemotron group (Linux only — shown when the restart callback is wired).
 	// A disabled status line shows the ~48 s model load; a restart item
 	// recovers a wedged sidecar.
@@ -324,6 +333,19 @@ func (t *Tray) onReady() {
 				if t.actions.OnSetupContextInsert() {
 					mi.SetTitle(contextInsertTitle(true))
 					mi.Disable()
+				}
+			}
+		}()
+	}
+	// eXpress relaunch — fire the callback (kills + relaunches eXpress with the
+	// accessibility flag). Stays clickable so the user can re-run it after an
+	// eXpress restart re-spawned a bare instance.
+	if expressItem != nil {
+		mi := expressItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnRestartExpress != nil {
+					t.actions.OnRestartExpress()
 				}
 			}
 		}()
