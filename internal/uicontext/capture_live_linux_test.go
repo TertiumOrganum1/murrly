@@ -262,6 +262,37 @@ func TestLiveScan(t *testing.T) {
 	t.Log("\n" + b.String())
 }
 
+// TestLiveAppTree dumps the FULL AT-SPI subtree of the app whose name contains
+// UICONTEXT_APP — every node's role/chars/caret/snippet, editable or not. Shows
+// whether an app (e.g. Sublime) exposes its text buffer to accessibility at all.
+//
+//	UICONTEXT_LIVE=1 UICONTEXT_APP=sublime go test -run TestLiveAppTree -v ./internal/uicontext/
+func TestLiveAppTree(t *testing.T) {
+	if os.Getenv("UICONTEXT_LIVE") == "" {
+		t.Skip("set UICONTEXT_LIVE=1")
+	}
+	want := strings.ToLower(os.Getenv("UICONTEXT_APP"))
+	dctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	c := &atspiClient{ctx: dctx, conn: getOrDie(t)}
+	var apps []ref
+	if err := c.call(ref{registryName, registryRoot}, ifaceAccessible+".GetChildren").Store(&apps); err != nil {
+		t.Fatalf("desktop: %v", err)
+	}
+	var b strings.Builder
+	for _, app := range apps {
+		name := c.nameOf(app)
+		if want == "" || strings.Contains(strings.ToLower(name), want) {
+			fmt.Fprintf(&b, "APP %q (%s):\n", name, app.Name)
+			c.dumpTree(&b, app, 0)
+		}
+	}
+	if out := os.Getenv("UICONTEXT_LIVE_OUT"); out != "" {
+		_ = os.WriteFile(out, []byte(b.String()), 0o644)
+	}
+	t.Log("\n" + b.String())
+}
+
 func (c *atspiClient) nameOf(r ref) string {
 	var v dbus.Variant
 	if err := c.call(r, "org.freedesktop.DBus.Properties.Get", ifaceAccessible, "Name").Store(&v); err != nil {
