@@ -13,13 +13,17 @@ const sentenceEnders = ".!?…"
 // sentence — lower-case the first letter and drop our terminator.
 const midConnectors = ",;:"
 
-// openBrackets: inserting right after one is mid-sentence, but with NO
-// leading space — the text sits flush against the bracket.
-const openBrackets = "([{<"
+// openFlush: an opening bracket or quote before the insertion point —
+// inserting right after one is mid-sentence, but with NO leading space (the
+// text sits flush against it). Covers ASCII brackets and the opening quotes
+// used in Russian/typographic text («, „, “, ‹).
+const openFlush = "([{<«„“‹"
 
-// dashes: an em/en dash before the insertion point continues the clause,
-// like a connector (lower-case, leading space unless one is already there).
-const dashes = "—–"
+// dashes: a dash/hyphen before the insertion point continues the clause, like
+// a connector (lower-case, leading space unless one is already there). Includes
+// the plain hyphen-minus (U+002D, what most keyboards type) in addition to the
+// typographic em/en dashes, figure dash, horizontal bar and minus sign.
+const dashes = "-—–‒―−"
 
 // tailMode says what happens to the end of the inserted text.
 type tailMode int
@@ -102,10 +106,10 @@ func Apply(text string, ctx Context) string {
 		lowercase = true
 		leadSpace = !ctx.SpaceBefore
 		tail = tailStrip
-	case strings.ContainsRune(openBrackets, ctx.Preceding):
-		// Right after an opening bracket — mid-sentence, but never a leading
-		// space (the text sits flush against the bracket). Lower-case the
-		// first letter and drop the phrase's own terminal punctuation.
+	case strings.ContainsRune(openFlush, ctx.Preceding):
+		// Right after an opening bracket or quote — mid-sentence, but never a
+		// leading space (the text sits flush against it). Lower-case the first
+		// letter and drop the phrase's own terminal punctuation.
 		lowercase = true
 		tail = tailStrip
 	case strings.ContainsRune(dashes, ctx.Preceding):

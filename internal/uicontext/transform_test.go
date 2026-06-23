@@ -192,6 +192,18 @@ func TestApplyRules(t *testing.T) {
 			ctx:  Context{HasContext: true, Preceding: '—', SpaceBefore: true},
 			want: "привет",
 		},
+		{
+			name: "plain hyphen-minus continues the clause (lower-case)",
+			text: "Пример.",
+			ctx:  Context{HasContext: true, Preceding: '-', SpaceBefore: true},
+			want: "пример",
+		},
+		{
+			name: "opening guillemet quote is mid-sentence, no leading space",
+			text: "Пример.",
+			ctx:  Context{HasContext: true, Preceding: '«'},
+			want: "пример",
+		},
 
 		// --- guards ---
 		{
