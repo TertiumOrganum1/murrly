@@ -386,7 +386,7 @@ func (c *atspiClient) capture(pid uint32, rect winRect) Context {
 		if ctx.HasContext {
 			return ctx
 		}
-		// An opaque rich editor (the VS Code / Electron / Claude Code chat
+		// An opaque rich editor (a VS Code / Electron webview chat
 		// input) IS the field the user is in — it just hides its real text
 		// behind an embed placeholder. The sort already put it first (in the
 		// active window's rect, editable, fewest chars), so reaching it here
@@ -478,6 +478,15 @@ func (c *atspiClient) focusedIn(app ref) ([]ref, error) {
 // element. Returns a non-empty status when the element is unusable
 // (no Text, caret unknown, terminal).
 func (c *atspiClient) readContext(m ref) (Context, string) {
+	return c.readContextDepth(m, 0)
+}
+
+// readContextDepth reads insertion context from m. Some Electron rich inputs
+// (the Codex panel, eXpress) expose the focused editable as a single-embed
+// WRAPPER whose own caret is pinned at 0, while the real text and live caret
+// live in an editable text child (a paragraph). depth bounds the descent into
+// such children (see caretBearingChild).
+func (c *atspiClient) readContextDepth(m ref, depth int) (Context, string) {
 	role, err := c.roleName(m)
 	if err != nil {
 		return Context{}, "role: " + err.Error()
@@ -500,6 +509,16 @@ func (c *atspiClient) readContext(m ref) (Context, string) {
 		// labels it DOES expose mangles every insert, so bail to the
 		// untouched-passthrough behaviour.
 		return Context{}, "opaque-editor(" + role + ")"
+	}
+	// Embed-wrapper whose real text + live caret live in an editable child
+	// (Codex / eXpress): read the context from that child, not the wrapper
+	// (whose caret is pinned at 0 and would mis-read every insert as a fresh
+	// start). Proven live 2026-06-23: wrapper /4 text='￼' caret=0, child /7
+	// [paragraph] = the typed text with caret at its end.
+	if depth < 6 {
+		if child, ok := c.caretBearingChild(m, count); ok {
+			return c.readContextDepth(child, depth+1)
+		}
 	}
 	caret, err := c.caretOffset(m)
 	if err != nil {
@@ -593,6 +612,62 @@ func (c *atspiClient) opaqueRichEditor(node ref, count int) bool {
 		}
 	}
 	return true
+}
+
+// caretBearingChild returns the editable text child that actually holds the
+// live caret, when `node` is an embed-WRAPPER (its content is entirely U+FFFC
+// placeholders) but a child paragraph carries the real text. This is the
+// signature of the Codex panel / eXpress message box: the wrapper's own caret
+// is pinned at 0, so reading it directly mis-reports every insert as a fresh
+// start — the child paragraph is where the text and caret really are.
+//
+// Returns false for normal fields (real text in the node itself) and for
+// empty wrappers (no child with content), so the empty-field / fresh-start
+// and opaque-passthrough behaviours are untouched.
+func (c *atspiClient) caretBearingChild(node ref, count int) (ref, bool) {
+	if count <= 0 || count > 64 {
+		return ref{}, false
+	}
+	txt, err := c.getText(node, 0, count)
+	if err != nil {
+		return ref{}, false
+	}
+	embeds := 0
+	for _, r := range txt {
+		switch {
+		case r == embedChar:
+			embeds++
+		case !unicode.IsSpace(r):
+			return ref{}, false // real text in the node itself — read it directly
+		}
+	}
+	if embeds == 0 {
+		return ref{}, false
+	}
+	// Pick the editable text child with content that reports the furthest
+	// caret offset — that's the paragraph the user is editing (inactive
+	// paragraphs report caret -1 / 0).
+	var best ref
+	bestCaret := -1
+	for i := 0; i < embeds && i < 16; i++ {
+		ch, err := c.childAt(node, i)
+		if err != nil {
+			continue
+		}
+		if !c.hasText(ch) || !c.isEditable(ch) {
+			continue
+		}
+		if n, _ := c.charCount(ch); n <= 0 {
+			continue
+		}
+		if cr, _ := c.caretOffset(ch); cr > bestCaret {
+			bestCaret, best = cr, ch
+		}
+	}
+	if bestCaret >= 0 {
+		return best, true
+	}
+	return ref{}, false
 }
 
 // frame remembers where an embed descent left the parent: embedPos is

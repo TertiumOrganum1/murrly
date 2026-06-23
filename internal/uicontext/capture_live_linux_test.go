@@ -79,7 +79,13 @@ func TestLiveFocusSignals(t *testing.T) {
 	conn.Signal(ch)
 
 	c := &atspiClient{ctx: context.Background(), conn: getOrDie(t)}
-	deadline := time.After(30 * time.Second)
+	secs := 30
+	if s := os.Getenv("UICONTEXT_PROBE_SECS"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			secs = n
+		}
+	}
+	deadline := time.After(time.Duration(secs) * time.Second)
 	out := os.Getenv("UICONTEXT_LIVE_OUT")
 	var b strings.Builder
 	t.Log("probing focus/caret signals for 30s — click into chat, then text file, then type")
@@ -126,6 +132,176 @@ func TestLiveFocusSignals(t *testing.T) {
 			t.Log(line)
 			b.WriteString(line + "\n")
 		}
+	}
+}
+
+// TestLiveTree dumps the FULL AT-SPI subtree under every focused element in
+// the active window — role, char count, caret, and a text snippet at each
+// node. It answers: is the typed text hidden somewhere DEEPER in the tree
+// than readContext drills, or is it absent from accessibility entirely?
+//
+//	UICONTEXT_LIVE=1 UICONTEXT_DELAY=7 go test -run TestLiveTree -v ./internal/uicontext/
+func TestLiveTree(t *testing.T) {
+	if os.Getenv("UICONTEXT_LIVE") == "" {
+		t.Skip("set UICONTEXT_LIVE=1")
+	}
+	// Poll for up to ~25s until the active window holds a focused EDITABLE
+	// element in-rect (the input box), then dump. This removes the
+	// guess-the-timing problem: just click into the target field within the
+	// window and the dump fires on the right frame automatically.
+	conn := getOrDie(t)
+	var b strings.Builder
+	deadline := time.Now().Add(25 * time.Second)
+	t.Log("polling up to 25s — click into the target input field and hold")
+	for {
+		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pid, rect, err := activeWindow(dctx)
+		if err != nil {
+			cancel()
+			break
+		}
+		c := &atspiClient{ctx: dctx, conn: conn}
+		apps, _ := c.appsForPID(pid)
+		var focusedEditable []ref
+		for _, app := range apps {
+			matches, _ := c.focusedIn(app)
+			for _, m := range matches {
+				if c.isEditable(m) {
+					focusedEditable = append(focusedEditable, m)
+				}
+			}
+		}
+		if len(focusedEditable) > 0 {
+			fmt.Fprintf(&b, "pid=%d rect=%+v\n", pid, rect)
+			for _, m := range focusedEditable {
+				fmt.Fprintf(&b, "FOCUSED-EDITABLE busname=%s path=%s:\n", m.Name, m.Path)
+				c.dumpTree(&b, m, 0)
+			}
+			cancel()
+			break
+		}
+		cancel()
+		if time.Now().After(deadline) {
+			b.WriteString("no focused-editable element seen within 25s\n")
+			break
+		}
+		time.Sleep(700 * time.Millisecond)
+	}
+	out := os.Getenv("UICONTEXT_LIVE_OUT")
+	if out != "" {
+		_ = os.WriteFile(out, []byte(b.String()), 0o644)
+	}
+	t.Log("\n" + b.String())
+}
+
+// dumpTree recursively prints role/chars/caret/snippet for a node and its
+// descendants, depth- and breadth-limited so a runaway tree can't hang.
+func (c *atspiClient) dumpTree(b *strings.Builder, node ref, depth int) {
+	if depth > 8 {
+		return
+	}
+	role, _ := c.roleName(node)
+	cnt, _ := c.charCount(node)
+	caret, _ := c.caretOffset(node)
+	snip := ""
+	if cnt > 0 {
+		n := cnt
+		if n > 60 {
+			n = 60
+		}
+		if tx, err := c.getText(node, 0, n); err == nil {
+			snip = strconv.Quote(tx)
+		}
+	}
+	fmt.Fprintf(b, "%s%s role=%s chars=%d caret=%d editable=%v snip=%s\n",
+		strings.Repeat("  ", depth+1), node.Path, role, cnt, caret, c.isEditable(node), snip)
+	var children []ref
+	if err := c.call(node, ifaceAccessible+".GetChildren").Store(&children); err != nil {
+		return
+	}
+	for i, ch := range children {
+		if i >= 12 {
+			fmt.Fprintf(b, "%s… (%d more children)\n", strings.Repeat("  ", depth+2), len(children)-12)
+			break
+		}
+		c.dumpTree(b, ch, depth+1)
+	}
+}
+
+// TestLiveScan walks EVERY app on the a11y bus and prints all editable text
+// fields with their busname/path/role and a text snippet — NO focus needed,
+// the user holds nothing. Finds the Codex / webview chat input wherever it is and
+// shows whether its typed text reaches accessibility.
+//
+//	UICONTEXT_LIVE=1 go test -run TestLiveScan -v ./internal/uicontext/
+func TestLiveScan(t *testing.T) {
+	if os.Getenv("UICONTEXT_LIVE") == "" {
+		t.Skip("set UICONTEXT_LIVE=1")
+	}
+	dctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	conn := getOrDie(t)
+	c := &atspiClient{ctx: dctx, conn: conn}
+	var apps []ref
+	if err := c.call(ref{registryName, registryRoot}, ifaceAccessible+".GetChildren").Store(&apps); err != nil {
+		t.Fatalf("desktop children: %v", err)
+	}
+	var b strings.Builder
+	for _, app := range apps {
+		name := c.nameOf(app)
+		var hits strings.Builder
+		c.scanEditable(&hits, app, 0)
+		if hits.Len() > 0 {
+			fmt.Fprintf(&b, "APP %q (%s):\n%s", name, app.Name, hits.String())
+		}
+	}
+	out := os.Getenv("UICONTEXT_LIVE_OUT")
+	if out != "" {
+		_ = os.WriteFile(out, []byte(b.String()), 0o644)
+	}
+	t.Log("\n" + b.String())
+}
+
+func (c *atspiClient) nameOf(r ref) string {
+	var v dbus.Variant
+	if err := c.call(r, "org.freedesktop.DBus.Properties.Get", ifaceAccessible, "Name").Store(&v); err != nil {
+		return ""
+	}
+	s, _ := v.Value().(string)
+	return s
+}
+
+// scanEditable recursively prints every editable Text node under root.
+func (c *atspiClient) scanEditable(b *strings.Builder, node ref, depth int) {
+	if depth > 14 {
+		return
+	}
+	if c.hasText(node) && c.isEditable(node) {
+		role, _ := c.roleName(node)
+		cnt, _ := c.charCount(node)
+		caret, _ := c.caretOffset(node)
+		snip := ""
+		if cnt > 0 {
+			n := cnt
+			if n > 80 {
+				n = 80
+			}
+			if tx, err := c.getText(node, 0, n); err == nil {
+				snip = strconv.Quote(tx)
+			}
+		}
+		fmt.Fprintf(b, "  EDITABLE busname=%s path=%s role=%s chars=%d caret=%d snip=%s\n",
+			node.Name, node.Path, role, cnt, caret, snip)
+	}
+	var children []ref
+	if err := c.call(node, ifaceAccessible+".GetChildren").Store(&children); err != nil {
+		return
+	}
+	for i, ch := range children {
+		if i >= 40 {
+			break
+		}
+		c.scanEditable(b, ch, depth+1)
 	}
 }
 
