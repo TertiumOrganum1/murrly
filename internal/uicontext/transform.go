@@ -163,7 +163,13 @@ func Apply(text string, ctx Context) string {
 			}
 		}
 	case tailKeep:
-		if ctx.RightKnown && (ctx.AtEnd || unicode.IsSpace(ctx.Following)) {
+		// A full sentence ends with its terminator AND a trailing space, so the
+		// next dictation (cursor left sitting right after it) is separated —
+		// "Первое. Второе.", not "Первое.Второе.". Only drop our trailing space
+		// when an inline space (' '/'\t') already follows the caret, to avoid a
+		// double space. At end of field, or before a line break ('\n' — which
+		// doesn't separate sentences on the same line), KEEP the space.
+		if ctx.RightKnown && (ctx.Following == ' ' || ctx.Following == '\t') {
 			out = strings.TrimRight(out, " \t")
 		}
 	}

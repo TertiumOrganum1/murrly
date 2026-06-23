@@ -33,16 +33,16 @@ func TestApplyRules(t *testing.T) {
 			want: "Привет. ",
 		},
 		{
-			name: "replace-all (select-all) behaves as empty field, trailing blank dropped",
+			name: "replace-all (select-all) behaves as empty field, keeps trailing space",
 			text: "привет. ",
 			ctx:  Context{HasContext: true, AtStart: true, RightKnown: true, AtEnd: true},
-			want: "Привет.",
+			want: "Привет. ",
 		},
 		{
-			name: "line start (after newline) capitalises, no leading space",
+			name: "line start (after newline) capitalises, keeps trailing space",
 			text: "привет. ",
 			ctx:  Context{HasContext: true, Preceding: '\n', RightKnown: true, AtEnd: true},
-			want: "Привет.",
+			want: "Привет. ",
 		},
 
 		// --- left side: after sentence terminator ---
@@ -65,10 +65,10 @@ func TestApplyRules(t *testing.T) {
 			want: "Привет. ",
 		},
 		{
-			name: "sentence at end of field drops the dangling blank",
+			name: "sentence at end of field keeps terminator and trailing space",
 			text: "привет. ",
 			ctx:  Context{HasContext: true, Preceding: '.', RightKnown: true, AtEnd: true},
-			want: " Привет.",
+			want: " Привет. ",
 		},
 		{
 			name: "sentence before existing space keeps period, drops own blank",
