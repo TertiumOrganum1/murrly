@@ -1,6 +1,11 @@
 INCLUDE_PATH := $(abspath $(WHISPER_DIR)/include):$(abspath $(WHISPER_DIR)/ggml/include)
 LIBRARY_PATH := $(abspath $(WHISPER_BUILD)/src):$(abspath $(WHISPER_BUILD)/ggml/src):$(abspath $(WHISPER_BUILD)/ggml/src/ggml-cpu):$(abspath $(WHISPER_BUILD)/ggml/src/ggml-cuda):/usr/lib/x86_64-linux-gnu
-CUDA_LDFLAGS := -lggml-cuda -lcudart -lcublas -lcuda -lstdc++
+# -rpath-link lets the linker resolve TRANSITIVE shared deps (libX11 → libxcb,
+# libportaudio → libjack) from the system lib dir. Needed when a non-system ld
+# is first in PATH (e.g. a linuxbrew binutils), which otherwise doesn't search
+# /usr/lib/x86_64-linux-gnu for indirect deps and fails with undefined
+# xcb_*/jack_* references. Harmless with the system ld.
+CUDA_LDFLAGS := -Wl,-rpath-link=/usr/lib/x86_64-linux-gnu -lggml-cuda -lcudart -lcublas -lcuda -lstdc++
 CUDA_HOST_COMPILER ?= /usr/bin/g++-8
 INSTALL_DATA_DIR := $(HOME)/.local/share/murrly
 
