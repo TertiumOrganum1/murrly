@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // eXpress (corporate Electron messenger) exposes NO AT-SPI tree for its
@@ -100,7 +101,25 @@ func RestartExpressWithA11y() ([]string, error) {
 	if !ExpressInstalled() {
 		return []string{"eXpress не установлен."}, nil
 	}
-	_ = exec.Command("pkill", "-f", expressBin).Run() // ignore "no process"
+	_ = exec.Command("pkill", "-9", "-f", expressBin).Run() // ignore "no process"
+	// Wait for the main process to die, then clear eXpress's stale single-
+	// instance lock. A -9'd or orphaned process leaves SingletonLock pointing at
+	// a dead PID, and the fresh launch exits on sight of it — the "kills but
+	// won't relaunch" bug. Electron recreates these files. Order matches the
+	// working manual recovery: kill all → remove lock → relaunch.
+	for i := 0; i < 25; i++ {
+		if running, _ := expressState(); !running {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if home, err := os.UserHomeDir(); err == nil {
+		dir := filepath.Join(home, ".config", "eXpress")
+		for _, f := range []string{"SingletonLock", "SingletonSocket", "SingletonCookie"} {
+			_ = os.Remove(filepath.Join(dir, f))
+		}
+	}
 	if err := launchExpressDetached(); err != nil {
 		return []string{"Не удалось запустить eXpress с флагом доступности."}, err
 	}
