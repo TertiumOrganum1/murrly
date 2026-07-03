@@ -381,26 +381,28 @@ func (c *atspiClient) capture(pid uint32, rect winRect) Context {
 	})
 
 	lastStatus := "no-readable-focus"
+	opaqueSeen := false
 	for _, cn := range cands {
 		ctx, status := c.readContext(cn.ref)
 		if ctx.HasContext {
 			return ctx
 		}
-		// An opaque rich editor (a VS Code / Electron webview chat
-		// input) IS the field the user is in — it just hides its real text
-		// behind an embed placeholder. The sort already put it first (in the
-		// active window's rect, editable, fewest chars), so reaching it here
-		// means it's the paste target: return passthrough (the phrase keeps
-		// its own capital + terminator, i.e. a fresh start) and STOP. Falling
-		// through to the next focused field is exactly what made an empty chat
-		// read the open editor's full-document mirror and mangle the insert as
-		// mid-sentence — the bug this whole geometry pass exists to prevent.
+		// An opaque rich editor (an embed-placeholder box) is a VALID paste
+		// target only when there's nothing better: a VS Code / Claude Code chat
+		// exposes SEVERAL focused entries at once — opaque hint/placeholder
+		// boxes ("ctrl esc to focus…") AND the real input that holds the typed
+		// text and the live caret. Do NOT stop on the first opaque box; keep
+		// scanning so the real input (which reads with HasContext=true) wins.
+		// Only when EVERY candidate is opaque is the field truly empty → return
+		// passthrough (fresh start: the phrase keeps its own capital + term).
 		if strings.HasPrefix(status, "opaque-editor") {
-			return Context{Status: status}
-		}
-		if status != "" {
+			opaqueSeen = true
+		} else if status != "" {
 			lastStatus = status
 		}
+	}
+	if opaqueSeen {
+		return Context{Status: "opaque-editor"}
 	}
 	return Context{Status: lastStatus}
 }
