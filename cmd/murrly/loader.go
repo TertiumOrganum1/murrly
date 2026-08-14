@@ -34,7 +34,27 @@ func newTranscriberLoader(initial *transcriber.Transcriber, cfg config.WhisperCo
 func (l *transcriberLoader) Transcribe(pcm []float32) (string, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if l.tr == nil {
+		return "", fmt.Errorf("transcriber closed")
+	}
 	return l.tr.Transcribe(pcm)
+}
+
+// Close releases the active Transcriber's model, which is what frees the
+// ~3 GB of Metal/CUDA buffers it holds. Taking the write lock means an
+// in-flight Transcribe finishes before whisper_free runs — tearing the
+// backend down under a running inference is how a CUDA context ends up
+// leaked. Leaves tr nil, so a stray Transcribe afterwards errors instead
+// of dereferencing a freed model.
+func (l *transcriberLoader) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.tr == nil {
+		return nil
+	}
+	err := l.tr.Close()
+	l.tr = nil
+	return err
 }
 
 // Reload swaps the underlying Transcriber to one loaded with modelName.

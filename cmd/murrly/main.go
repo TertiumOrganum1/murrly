@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -50,6 +51,12 @@ import (
 // the tray pack is different per platform (Linux gets the colored cat,
 // macOS keeps the menu-bar-style monochrome silhouettes everyone else
 // uses up there).
+
+// releaseModel hands the loaded Whisper model back to the GPU driver. main
+// replaces it with the real teardown as soon as an engine exists; before that
+// it is a no-op. It lives at package scope so the log.Fatal paths — which skip
+// every defer — can still free the device buffers before the process dies.
+var releaseModel = func() {}
 
 func main() {
 	closeLog := setupLogging()
@@ -133,6 +140,42 @@ func main() {
 			log.Fatalf("transcriber: %v", terr)
 		}
 		loader = newTranscriberLoader(tr, cfg.Whisper)
+	}
+
+	// Releasing the model is whisper_free, which tears down the ggml-CUDA (or
+	// Metal) backend and gives the device buffers back — ~2.5 GB for
+	// large-v3-turbo at beam_size=8. Both engines close under their own
+	// inference lock, so this blocks until an in-flight transcription has
+	// finished: the process must never reach exit() with whisper_full still
+	// running on the GPU.
+	//
+	// Skipping it is not merely untidy. The buffers would then be reclaimed
+	// only by the kernel tearing down our /dev/nvidia* fds on process death,
+	// and an exit that lands mid-cudaMalloc leaves the driver holding an
+	// allocation it never gives back — nvidia-smi shows the VRAM charged to a
+	// PID that no longer exists and only a reboot clears it. Same reasoning as
+	// terminateOtherInstances, applied to our own shutdown.
+	//
+	// Idempotent: the fatal paths and the normal shutdown at the end of main
+	// both go through it.
+	var releaseOnce sync.Once
+	releaseModel = func() {
+		releaseOnce.Do(func() {
+			var cerr error
+			switch {
+			case multiRunner != nil:
+				cerr = multiRunner.Close()
+			case loader != nil:
+				cerr = loader.Close()
+			default:
+				return
+			}
+			if cerr != nil {
+				log.Printf("shutdown: release model: %v", cerr)
+				return
+			}
+			log.Printf("shutdown: model released, GPU buffers freed")
+		})
 	}
 
 	// switchModel / reloadConfig route the model-picker and reload-config
@@ -492,6 +535,10 @@ func main() {
 
 	hk, err := hotkey.New(cfg.Hotkey.Key)
 	if err != nil {
+		// The model is already in VRAM by now and log.Fatalf skips defers, so
+		// free it by hand — a hotkey clash (another dictation app holding the
+		// key) must not exit with the buffers still on the GPU.
+		releaseModel()
 		log.Fatalf("hotkey: %v", err)
 	}
 	go hk.Start()
@@ -623,7 +670,10 @@ func main() {
 	}()
 
 	t.Run() // blocks until systray.Quit() is called
+	// Stop the hotkey first so no new recording can start, then wait for any
+	// in-flight transcription and free the GPU buffers before we exit.
 	hk.Stop()
+	releaseModel()
 }
 
 // scoringModeOrder fixes the menu row order; scoringModeLabels are the
@@ -766,6 +816,8 @@ func toTrayState(s app.State) tray.State {
 func mustReadIcon(name string) []byte {
 	b, err := iconFS.ReadFile(iconDir + "/" + name)
 	if err != nil {
+		// Called after the model is loaded, and log.Fatalf skips defers.
+		releaseModel()
 		log.Fatalf("embed read %s: %v", name, err)
 	}
 	return b
