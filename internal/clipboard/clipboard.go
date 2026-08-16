@@ -28,6 +28,11 @@ type Saved struct {
 
 type Clipboard struct {
 	RestorePrimary bool
+	// pasteTracker is platform-specific state for detecting when the
+	// pasted text has actually been fetched by the target application
+	// (see WaitPasted on Linux). Empty struct on platforms without an
+	// observable selection owner.
+	pasteTracker
 }
 
 func New() *Clipboard {

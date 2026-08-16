@@ -134,6 +134,23 @@ type Paster interface {
 	Paste() error
 }
 
+// PasteWaiter is optionally implemented by clipboard backends that can
+// observe the target application actually fetching the pasted text (the
+// X11 backend watches its selection owner's request counter). When
+// available, the insert path waits for that signal after Paste and before
+// Restore — restoring on a fixed timer raced slow applications, which then
+// pasted the restored OLD clipboard (even images) instead of the dictation.
+type PasteWaiter interface {
+	// WaitPasted returns true once the text from the last Set has been
+	// fetched after Set returned, or false when the timeout elapsed.
+	WaitPasted(timeout time.Duration) bool
+}
+
+// pasteWaitTimeout bounds how long the insert path waits for the paste to
+// be observed before restoring the old clipboard anyway — the target may
+// legitimately never fetch it (e.g. a terminal that ignores Ctrl+V).
+const pasteWaitTimeout = 3 * time.Second
+
 type Config struct {
 	Recorder    Recorder
 	Transcriber Transcriber
@@ -796,6 +813,15 @@ func (a *App) insertText(text string) error {
 	if err := a.cfg.Paster.Paste(); err != nil {
 		return fmt.Errorf("paster.Paste: %w", err)
 	}
+	if w, ok := a.cfg.Clipboard.(PasteWaiter); ok {
+		if !w.WaitPasted(pasteWaitTimeout) {
+			log.Printf("insert: paste not observed within %v; restoring clipboard anyway", pasteWaitTimeout)
+		}
+	}
+	// PasteDelay is grace time before Restore: after the fetch was observed
+	// it covers pasters that request the content a second time; on backends
+	// without PasteWaiter it remains the only spacing between Ctrl+V and
+	// Restore.
 	time.Sleep(a.cfg.PasteDelay)
 	if err := a.cfg.Clipboard.Restore(saved); err != nil {
 		log.Printf("clipboard.Restore: %v", err)

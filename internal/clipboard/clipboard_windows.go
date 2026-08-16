@@ -19,6 +19,10 @@ import (
 // formats (files, RTF) aren't round-tripped; HasContent stays false for them
 // and Restore clears, matching the Linux "best effort, keep dictating" stance.
 
+// pasteTracker is empty on Windows: the clipboard is a one-shot copy with
+// no observable owner process, so there is no WaitPasted here.
+type pasteTracker struct{}
+
 const (
 	cfUnicodeText = 13
 	cfDIB         = 8

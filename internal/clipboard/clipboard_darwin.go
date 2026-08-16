@@ -15,6 +15,10 @@ import (
 	"unsafe"
 )
 
+// pasteTracker is empty on macOS: NSPasteboard is a one-shot copy with no
+// observable owner process, so there is no WaitPasted here.
+type pasteTracker struct{}
+
 // Save snapshots the entire NSPasteboard via the native API. Every type
 // of every item (text, image, RTF, file URLs, …) is captured into an
 // opaque token carried through Restore — so a copied screenshot survives

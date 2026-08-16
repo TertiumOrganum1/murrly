@@ -253,3 +253,102 @@ func TestEmptyRecordingSkipsTranscriptionAndPaste(t *testing.T) {
 		t.Error("paste should not happen when recording is empty")
 	}
 }
+
+// orderLog records the sequence of insert-path calls across fakes so
+// tests can assert their relative order.
+type orderLog struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (l *orderLog) add(s string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.calls = append(l.calls, s)
+}
+
+func (l *orderLog) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]string, len(l.calls))
+	copy(out, l.calls)
+	return out
+}
+
+// waitingClipboard is a fakeClipboard that also implements PasteWaiter,
+// mimicking the Linux backend which can observe the target application
+// fetching the pasted text.
+type waitingClipboard struct {
+	fakeClipboard
+	log *orderLog
+}
+
+func (c *waitingClipboard) Set(text string) error {
+	c.log.add("set")
+	return c.fakeClipboard.Set(text)
+}
+
+func (c *waitingClipboard) Restore(s any) error {
+	c.log.add("restore")
+	return c.fakeClipboard.Restore(s)
+}
+
+func (c *waitingClipboard) WaitPasted(_ time.Duration) bool {
+	c.log.add("wait")
+	return true
+}
+
+type loggingPaster struct {
+	fakePaster
+	log *orderLog
+}
+
+func (p *loggingPaster) Paste() error {
+	p.log.add("paste")
+	return p.fakePaster.Paste()
+}
+
+// TestWaitPastedCalledBetweenPasteAndRestore pins the fix for the
+// stale-clipboard race: when the clipboard backend can report that the
+// pasted text was actually fetched (PasteWaiter), the app must wait for
+// that signal after Paste and before Restore — otherwise a slow target
+// application pastes the restored OLD clipboard instead of the dictation.
+func TestWaitPastedCalledBetweenPasteAndRestore(t *testing.T) {
+	rec := &fakeRecorder{pcm: []float32{0.1, 0.2, 0.3}}
+	tr := &fakeTranscriber{output: "hello world"}
+	lg := &orderLog{}
+	cb := &waitingClipboard{log: lg}
+	pa := &loggingPaster{log: lg}
+	st := &recordedStates{}
+
+	a := New(Config{
+		Recorder:    rec,
+		Transcriber: tr,
+		Clipboard:   cb,
+		Paster:      pa,
+		OnState:     st.Set,
+		PasteDelay:  10 * time.Millisecond,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	events := make(chan Event, 4)
+	go a.Run(ctx, events)
+
+	events <- EventKeyDown
+	time.Sleep(20 * time.Millisecond)
+	events <- EventKeyUp
+	waitUntilIdle(t, st)
+
+	got := lg.snapshot()
+	want := []string{"set", "paste", "wait", "restore"}
+	if len(got) != len(want) {
+		t.Fatalf("insert call order: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("insert call order: got %v, want %v", got, want)
+		}
+	}
+}

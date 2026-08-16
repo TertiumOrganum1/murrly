@@ -3,15 +3,39 @@
 package clipboard
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// pasteTracker holds the verbose xclip owner spawned by the last Set so
+// WaitPasted can observe when the pasted text is actually fetched by the
+// target application. The darwin/windows clipboards have no observable
+// owner process; their pasteTracker is an empty struct.
+type pasteTracker struct {
+	mu    sync.Mutex
+	owner *xclipOwner
+}
+
+// xclipOwner tracks one `xclip -i -verbose` selection owner. served counts
+// completed content transfers (xclip does not count TARGETS requests).
+// WaitPasted snapshots it on entry and waits for it to grow, so only
+// fetches that happen after the call — i.e. the target application's
+// paste — are detected; earlier fetches (Set's confirmation read, desktop
+// snoopers that burst-read on ownership change) are absorbed.
+type xclipOwner struct {
+	served atomic.Int64
+}
 
 // xclipReadTimeout caps every blocking xclip -o call. X11 selections are
 // served by the owning process, so a hung owner (dead screenshot tool,
@@ -94,7 +118,8 @@ func (c *Clipboard) Save() (Saved, error) {
 }
 
 func (c *Clipboard) Set(text string) error {
-	if err := writeSelection("clipboard", text); err != nil {
+	owner, err := writeSelectionTracked("clipboard", text)
+	if err != nil {
 		return err
 	}
 	// xclip claims the selection asynchronously after Start(), so Set used
@@ -104,6 +129,9 @@ func (c *Clipboard) Set(text string) error {
 	// dictation. Block until the selection really serves `text` (ownership
 	// claimed) before returning.
 	confirmSelection("clipboard", text, clipboardClaimTimeout)
+	c.mu.Lock()
+	c.owner = owner
+	c.mu.Unlock()
 	return nil
 }
 
@@ -128,6 +156,79 @@ func confirmSelection(sel, want string, timeout time.Duration) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+var requestNumberRe = regexp.MustCompile(`Waiting for selection request number (\d+)`)
+
+// parseRequestNumber extracts N from xclip -verbose's "Waiting for
+// selection request number N" stderr lines. ok=false for any other line.
+func parseRequestNumber(line string) (int, bool) {
+	m := requestNumberRe.FindStringSubmatch(line)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// WaitPasted blocks until the selection content published by the last Set
+// is fetched at least once AFTER this call — i.e. the target application
+// actually pasted it — or the timeout elapses. Returns true when the
+// fetch was observed. Call it right after the paste keystroke: fetches
+// that happened earlier (Set's confirmation read, desktop snoopers
+// burst-reading on ownership change) do not count.
+func (c *Clipboard) WaitPasted(timeout time.Duration) bool {
+	c.mu.Lock()
+	owner := c.owner
+	c.mu.Unlock()
+	if owner == nil {
+		return false
+	}
+	base := owner.served.Load()
+	deadline := time.Now().Add(timeout)
+	for {
+		if owner.served.Load() > base {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+}
+
+// writeSelectionTracked writes `text` into the X selection like
+// writeSelection, but runs xclip with -verbose (which also keeps it in
+// the foreground) and scans its stderr for "Waiting for selection request
+// number N" lines — xclip prints "number N+1" right after completing
+// content transfer N, which is how WaitPasted knows the target application
+// really fetched the dictation. The process still lives until a later
+// Set/Restore replaces it as selection owner (SelectionClear → xclip
+// exits → the scanner goroutine drains and reaps it).
+func writeSelectionTracked(sel, text string) (*xclipOwner, error) {
+	cmd := exec.Command("xclip", "-selection", sel, "-i", "-verbose")
+	cmd.Stdin = strings.NewReader(text)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	owner := &xclipOwner{}
+	go func() {
+		sc := bufio.NewScanner(stderr)
+		for sc.Scan() {
+			if n, ok := parseRequestNumber(sc.Text()); ok && n >= 1 {
+				owner.served.Store(int64(n - 1))
+			}
+		}
+		_ = cmd.Wait()
+	}()
+	return owner, nil
 }
 
 func (c *Clipboard) Restore(s Saved) error {

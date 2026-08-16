@@ -73,6 +73,87 @@ func readTextSettled(t *testing.T, want string) string {
 	return last
 }
 
+// TestParseRequestNumber covers the xclip -verbose stderr lines that
+// WaitPasted keys on. xclip prints "  Waiting for selection request
+// number N" after completing content transfer N-1 (TARGETS requests are
+// served without incrementing the counter).
+func TestParseRequestNumber(t *testing.T) {
+	cases := []struct {
+		line string
+		n    int
+		ok   bool
+	}{
+		{"  Waiting for selection request number 1", 1, true},
+		{"  Waiting for selection request number 12", 12, true},
+		{"Waiting for selection request number 3", 3, true},
+		{"Waiting for selection requests, Control-C to quit", 0, false},
+		{"Connected to X server.", 0, false},
+		{"Using UTF8_STRING.", 0, false},
+		{"", 0, false},
+	}
+	for _, c := range cases {
+		n, ok := parseRequestNumber(c.line)
+		if n != c.n || ok != c.ok {
+			t.Errorf("parseRequestNumber(%q) = (%d, %v), want (%d, %v)", c.line, n, ok, c.n, c.ok)
+		}
+	}
+}
+
+// TestWaitPastedDetectsFetch pins WaitPasted's baseline semantics: only
+// content fetches that happen AFTER the WaitPasted call count as the
+// paste. Fetches before the call — Set's own confirmation read, or
+// desktop clipboard snoopers that burst-read on every ownership change
+// (observed live: two content fetches within moments of a Set) — must be
+// absorbed. Uses the SECONDARY selection so live-desktop snoopers can't
+// interfere and the user's real clipboard isn't clobbered. Requires
+// xclip and a running X server.
+func TestWaitPastedDetectsFetch(t *testing.T) {
+	if _, err := exec.LookPath("xclip"); err != nil {
+		t.Skip("xclip not available")
+	}
+
+	c := New()
+	owner, err := writeSelectionTracked("secondary", "wait-pasted-probe")
+	if err != nil {
+		t.Fatalf("writeSelectionTracked: %v", err)
+	}
+	c.owner = owner
+
+	// A snooper-style fetch BEFORE WaitPasted is called…
+	fetchSecondarySettled(t, "wait-pasted-probe")
+
+	// …must not count as the paste: with no fetch inside the wait window
+	// this has to time out.
+	if c.WaitPasted(300 * time.Millisecond) {
+		t.Fatal("WaitPasted counted a fetch that happened before the call")
+	}
+
+	// The real paste: a content fetch landing while WaitPasted blocks.
+	timer := time.AfterFunc(300*time.Millisecond, func() {
+		_ = exec.Command("xclip", "-selection", "secondary", "-o").Run()
+	})
+	defer timer.Stop()
+
+	if !c.WaitPasted(2 * time.Second) {
+		t.Fatal("WaitPasted did not detect the content fetch")
+	}
+}
+
+// fetchSecondarySettled polls the SECONDARY selection until it serves want
+// (the freshly-started xclip owner may need a moment to claim it).
+func fetchSecondarySettled(t *testing.T, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		out, err := exec.Command("xclip", "-selection", "secondary", "-o").Output()
+		if err == nil && strings.TrimSpace(string(out)) == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("secondary selection never served %q", want)
+}
+
 func setText(s string) error {
 	cmd := exec.Command("xclip", "-selection", "clipboard", "-i")
 	cmd.Stdin = strings.NewReader(s)
