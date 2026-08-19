@@ -40,7 +40,8 @@ import "fmt"
 // Paste synthesises Cmd+V via CGEventPost so it draws on Murrly's own
 // Accessibility grant rather than a child osascript process which would
 // require a separate (and surprising) permission entry.
-func (p *Paster) Paste() error {
+func (p *Paster) Paste(beforeKey func()) error {
+	beforeKey()
 	if rc := C.mur_paste_cmd_v(); rc != 0 {
 		return fmt.Errorf("paster: CGEventPost failed (rc=%d) — check Accessibility permission for Murrly in System Settings", int(rc))
 	}

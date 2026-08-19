@@ -57,8 +57,9 @@ var (
 // Paste synthesises Ctrl+V to the focused window via SendInput. Ctrl is held
 // down explicitly around the V (down ctrl → down v → up v → up ctrl) so the
 // modifier is guaranteed present for the keypress.
-func (p *Paster) Paste() error {
+func (p *Paster) Paste(beforeKey func()) error {
 	time.Sleep(pasteSettleDelay)
+	beforeKey()
 
 	events := []input{
 		{inputType: inputKeyboard, ki: keybdInput{wVk: vkControl}},

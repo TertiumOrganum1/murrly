@@ -99,14 +99,13 @@ func TestParseRequestNumber(t *testing.T) {
 	}
 }
 
-// TestWaitPastedDetectsFetch pins WaitPasted's baseline semantics: only
-// content fetches that happen AFTER the WaitPasted call count as the
-// paste. Fetches before the call — Set's own confirmation read, or
-// desktop clipboard snoopers that burst-read on every ownership change
-// (observed live: two content fetches within moments of a Set) — must be
-// absorbed. Uses the SECONDARY selection so live-desktop snoopers can't
-// interfere and the user's real clipboard isn't clobbered. Requires
-// xclip and a running X server.
+// TestWaitPastedDetectsFetch pins the arming semantics: only fetches that
+// land after ArmPasteWait (which the paster calls immediately before the
+// keystroke) count as the paste. Fetches before it — Set's own
+// confirmation read, or the desktop clipboard snoopers that burst-read on
+// every ownership change (observed live: two content fetches moments after
+// a Set) — must be absorbed. Uses the SECONDARY selection so live-desktop
+// snoopers can't interfere and the user's real clipboard isn't clobbered.
 func TestWaitPastedDetectsFetch(t *testing.T) {
 	if _, err := exec.LookPath("xclip"); err != nil {
 		t.Skip("xclip not available")
@@ -119,23 +118,57 @@ func TestWaitPastedDetectsFetch(t *testing.T) {
 	}
 	c.owner = owner
 
-	// A snooper-style fetch BEFORE WaitPasted is called…
+	// A snooper-style fetch BEFORE arming…
 	fetchSecondarySettled(t, "wait-pasted-probe")
+	c.ArmPasteWait()
 
-	// …must not count as the paste: with no fetch inside the wait window
-	// this has to time out.
+	// …must not count: with no fetch after the mark this has to time out.
 	if c.WaitPasted(300 * time.Millisecond) {
-		t.Fatal("WaitPasted counted a fetch that happened before the call")
+		t.Fatal("WaitPasted counted a fetch that happened before arming")
 	}
 
-	// The real paste: a content fetch landing while WaitPasted blocks.
-	timer := time.AfterFunc(300*time.Millisecond, func() {
+	// The real paste: a content fetch landing after the mark. Arm first,
+	// exactly as the paster does right before pressing the keys.
+	c.ArmPasteWait()
+	timer := time.AfterFunc(200*time.Millisecond, func() {
 		_ = exec.Command("xclip", "-selection", "secondary", "-o").Run()
 	})
 	defer timer.Stop()
 
 	if !c.WaitPasted(2 * time.Second) {
 		t.Fatal("WaitPasted did not detect the content fetch")
+	}
+}
+
+// TestRestoreSurvivesAHostileClaim pins the other half of the deal: the
+// user's clipboard must come back even when something else claims the
+// selection right as our dictation owner gives it up. Restore verifies its
+// own work and re-publishes when the read-back shows a different owner won.
+func TestRestoreSurvivesAHostileClaim(t *testing.T) {
+	if _, err := exec.LookPath("xclip"); err != nil {
+		t.Skip("xclip not available")
+	}
+
+	c := New()
+	// Dictation owns the clipboard, the user's text is what we saved.
+	if err := c.Set("DICTATION-TEXT"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	saved := Saved{HasContent: true, Text: "USER-CLIPBOARD"}
+
+	// A hostile owner grabs the selection just after Restore publishes,
+	// the way a clipboard manager preserving the dying owner's content
+	// would.
+	timer := time.AfterFunc(60*time.Millisecond, func() {
+		_ = writeSelection("clipboard", "HOSTILE-CLAIM")
+	})
+	defer timer.Stop()
+
+	if err := c.Restore(saved); err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if got := readTextSettled(t, "USER-CLIPBOARD"); got != "USER-CLIPBOARD" {
+		t.Fatalf("after Restore: got %q, want USER-CLIPBOARD", got)
 	}
 }
 

@@ -23,8 +23,13 @@ import (
 // target application. The darwin/windows clipboards have no observable
 // owner process; their pasteTracker is an empty struct.
 type pasteTracker struct {
-	mu    sync.Mutex
+	mu sync.Mutex
+	// owner is the verbose xclip publishing the text from the last Set.
 	owner *xclipOwner
+	// armedAt is owner.served as of ArmPasteWait — the fetch count at the
+	// moment just before the paste keystroke. WaitPasted waits for the
+	// counter to move past it.
+	armedAt int64
 }
 
 // xclipOwner tracks one `xclip -i -verbose` selection owner. served counts
@@ -174,20 +179,34 @@ func parseRequestNumber(line string) (int, bool) {
 	return n, true
 }
 
-// WaitPasted blocks until the selection content published by the last Set
-// is fetched at least once AFTER this call — i.e. the target application
-// actually pasted it — or the timeout elapses. Returns true when the
-// fetch was observed. Call it right after the paste keystroke: fetches
-// that happened earlier (Set's confirmation read, desktop snoopers
-// burst-reading on ownership change) do not count.
+// ArmPasteWait records the current fetch count as the baseline for the
+// paste that is about to happen. The paster calls it immediately before
+// pressing Ctrl+V — everything fetched before that point (Set's own
+// confirmation read, desktop clipboard snoopers that burst-read on every
+// ownership change) belongs to the past and must not be mistaken for the
+// paste. Arming after the keystroke instead is a race the fast apps win:
+// they fetch while Paste is still returning, the fetch lands inside the
+// baseline, and the wait below then times out on every single insert.
+func (c *Clipboard) ArmPasteWait() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.owner == nil {
+		return
+	}
+	c.armedAt = c.owner.served.Load()
+}
+
+// WaitPasted blocks until the text published by the last Set is fetched
+// at least once after ArmPasteWait — i.e. the target application actually
+// pasted it — or the timeout elapses. Returns true when the fetch was
+// observed.
 func (c *Clipboard) WaitPasted(timeout time.Duration) bool {
 	c.mu.Lock()
-	owner := c.owner
+	owner, base := c.owner, c.armedAt
 	c.mu.Unlock()
 	if owner == nil {
 		return false
 	}
-	base := owner.served.Load()
 	deadline := time.Now().Add(timeout)
 	for {
 		if owner.served.Load() > base {
@@ -231,17 +250,43 @@ func writeSelectionTracked(sel, text string) (*xclipOwner, error) {
 	return owner, nil
 }
 
+// restoreAttempts is how many times Restore re-publishes the saved
+// clipboard when a verification read shows something else still owns it.
+// One retry covers the ordinary handoff race (a desktop clipboard manager
+// grabbing the selection as our dictation owner dies); beyond that we are
+// fighting a determined owner and should not spin.
+const restoreAttempts = 2
+
 func (c *Clipboard) Restore(s Saved) error {
-	switch {
-	case !s.HasContent:
-		_ = clearSelection("clipboard")
-	case s.Target != "" && len(s.Binary) > 0:
-		if err := writeSelectionBinary("clipboard", s.Target, s.Binary); err != nil {
-			return fmt.Errorf("restore clipboard %s: %w", s.Target, err)
+	// The dictation owner is being replaced — drop it so a late WaitPasted
+	// can't attribute the new owner's fetches to a paste that is over.
+	c.mu.Lock()
+	c.owner = nil
+	c.mu.Unlock()
+
+	for attempt := 1; ; attempt++ {
+		switch {
+		case !s.HasContent:
+			_ = clearSelection("clipboard")
+		case s.Target != "" && len(s.Binary) > 0:
+			if err := writeSelectionBinary("clipboard", s.Target, s.Binary); err != nil {
+				return fmt.Errorf("restore clipboard %s: %w", s.Target, err)
+			}
+		default:
+			if err := writeSelection("clipboard", s.Text); err != nil {
+				return fmt.Errorf("restore clipboard: %w", err)
+			}
 		}
-	default:
-		if err := writeSelection("clipboard", s.Text); err != nil {
-			return fmt.Errorf("restore clipboard: %w", err)
+		// Publishing a selection is a claim, not a guarantee: anyone can
+		// claim it right back. Read it back and re-publish once if the
+		// user's content did not actually land — losing the clipboard to
+		// a dictation is exactly what this whole dance exists to prevent.
+		if restoredOK(s) {
+			break
+		}
+		if attempt >= restoreAttempts {
+			log.Printf("clipboard: restored content did not stick after %d attempts; another owner is claiming the selection", attempt)
+			break
 		}
 	}
 	if c.RestorePrimary && s.HasPrimary {
@@ -324,6 +369,43 @@ func writeSelectionBinary(sel, target string, data []byte) error {
 	}
 	go cmd.Wait()
 	return nil
+}
+
+// restoreSettleDelay is how long Restore lets the selection settle before
+// reading it back. A fresh xclip claims within a few ms; the rest of the
+// window is there to catch a competing owner (a clipboard manager
+// preserving the dying dictation owner's content) claiming it right back.
+// It costs nothing the user waits on — the text is already inserted by
+// the time Restore runs.
+const restoreSettleDelay = 150 * time.Millisecond
+
+// restoredOK reports whether the clipboard really serves the saved payload
+// once the dust has settled. Deliberately reads AFTER the delay rather than
+// returning on the first match: a claim landing a moment later is exactly
+// the case worth catching. Text is compared exactly; binary payloads are
+// checked by the advertised target only, since re-reading a multi-megabyte
+// image just to compare it would cost more than the whole insert.
+func restoredOK(s Saved) bool {
+	if !s.HasContent {
+		// Nothing to protect — an empty clipboard is the goal state.
+		return true
+	}
+	time.Sleep(restoreSettleDelay)
+	if s.Target != "" {
+		targets, _ := readTargets("clipboard")
+		return containsTarget(targets, s.Target)
+	}
+	out, err := xclipOutput("-selection", "clipboard", "-o")
+	return err == nil && string(out) == s.Text
+}
+
+func containsTarget(targets []string, want string) bool {
+	for _, t := range targets {
+		if t == want {
+			return true
+		}
+	}
+	return false
 }
 
 func clearSelection(sel string) error {

@@ -131,7 +131,11 @@ type Clipboard interface {
 }
 
 type Paster interface {
-	Paste() error
+	// Paste synthesises the paste keystroke. beforeKey is invoked once the
+	// paster has settled and is about to press the keys — the last moment
+	// before the target application can possibly fetch the clipboard. It is
+	// never nil; pass a no-op when there is nothing to arm.
+	Paste(beforeKey func()) error
 }
 
 // PasteWaiter is optionally implemented by clipboard backends that can
@@ -141,15 +145,24 @@ type Paster interface {
 // Restore — restoring on a fixed timer raced slow applications, which then
 // pasted the restored OLD clipboard (even images) instead of the dictation.
 type PasteWaiter interface {
+	// ArmPasteWait marks the point from which fetches count as the paste.
+	// It must be called immediately before the paste keystroke: fetches
+	// that happen earlier (Set's own confirmation read, desktop clipboard
+	// snoopers that burst-read on every ownership change) are not the
+	// paste and must not be mistaken for it.
+	ArmPasteWait()
 	// WaitPasted returns true once the text from the last Set has been
-	// fetched after Set returned, or false when the timeout elapsed.
+	// fetched after ArmPasteWait, or false when the timeout elapsed.
 	WaitPasted(timeout time.Duration) bool
 }
 
 // pasteWaitTimeout bounds how long the insert path waits for the paste to
 // be observed before restoring the old clipboard anyway — the target may
-// legitimately never fetch it (e.g. a terminal that ignores Ctrl+V).
-const pasteWaitTimeout = 3 * time.Second
+// legitimately never fetch it (e.g. a terminal that ignores Ctrl+V). Keep
+// it short: every millisecond here is time the user's own clipboard is
+// still displaced by the dictation, and a Ctrl+V in that window hands them
+// the dictation back instead of what they copied.
+const pasteWaitTimeout = 1200 * time.Millisecond
 
 type Config struct {
 	Recorder    Recorder
@@ -810,13 +823,21 @@ func (a *App) insertText(text string) error {
 	if err := a.cfg.Clipboard.Set(text); err != nil {
 		return fmt.Errorf("clipboard.Set: %w", err)
 	}
-	if err := a.cfg.Paster.Paste(); err != nil {
+	w, canWait := a.cfg.Clipboard.(PasteWaiter)
+	// Arm the fetch detector from inside the paster, right before the
+	// keystroke. Arming out here instead raced the target application: a
+	// fast app fetched the clipboard while Paste was still returning, so
+	// the fetch landed before the mark and the wait below always timed out.
+	beforeKey := func() {
+		if canWait {
+			w.ArmPasteWait()
+		}
+	}
+	if err := a.cfg.Paster.Paste(beforeKey); err != nil {
 		return fmt.Errorf("paster.Paste: %w", err)
 	}
-	if w, ok := a.cfg.Clipboard.(PasteWaiter); ok {
-		if !w.WaitPasted(pasteWaitTimeout) {
-			log.Printf("insert: paste not observed within %v; restoring clipboard anyway", pasteWaitTimeout)
-		}
+	if canWait && !w.WaitPasted(pasteWaitTimeout) {
+		log.Printf("insert: paste not observed within %v; restoring clipboard anyway", pasteWaitTimeout)
 	}
 	// PasteDelay is grace time before Restore: after the fetch was observed
 	// it covers pasters that request the content a second time; on backends

@@ -25,9 +25,11 @@ const pasteSettleDelay = 300 * time.Millisecond
 // modifiers first. CapsLock handling: xdotool under --clearmodifiers can
 // flip CapsLock off and fail to restore it, so snapshot via `xset q` and
 // replay a Caps_Lock toggle if it ended up flipped.
-func (p *Paster) Paste() error {
+func (p *Paster) Paste(beforeKey func()) error {
 	time.Sleep(pasteSettleDelay)
 	capsBefore := capsLockOn()
+	// Last moment before the target application can fetch the clipboard.
+	beforeKey()
 	if err := exec.Command("xdotool", "keydown", "--clearmodifiers", "ctrl").Run(); err != nil {
 		return err
 	}

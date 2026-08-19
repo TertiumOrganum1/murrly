@@ -76,7 +76,7 @@ type fakePaster struct {
 	pasted bool
 }
 
-func (p *fakePaster) Paste() error {
+func (p *fakePaster) Paste(_ func()) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.pasted = true
@@ -293,6 +293,10 @@ func (c *waitingClipboard) Restore(s any) error {
 	return c.fakeClipboard.Restore(s)
 }
 
+func (c *waitingClipboard) ArmPasteWait() {
+	c.log.add("arm")
+}
+
 func (c *waitingClipboard) WaitPasted(_ time.Duration) bool {
 	c.log.add("wait")
 	return true
@@ -303,16 +307,20 @@ type loggingPaster struct {
 	log *orderLog
 }
 
-func (p *loggingPaster) Paste() error {
+func (p *loggingPaster) Paste(beforeKey func()) error {
+	// Real pasters arm the detector once they are about to press the keys.
+	beforeKey()
 	p.log.add("paste")
-	return p.fakePaster.Paste()
+	return p.fakePaster.Paste(beforeKey)
 }
 
 // TestWaitPastedCalledBetweenPasteAndRestore pins the fix for the
 // stale-clipboard race: when the clipboard backend can report that the
-// pasted text was actually fetched (PasteWaiter), the app must wait for
-// that signal after Paste and before Restore — otherwise a slow target
-// application pastes the restored OLD clipboard instead of the dictation.
+// pasted text was actually fetched (PasteWaiter), the app must arm the
+// detector from inside the paster (right before the keystroke) and wait
+// for the fetch before Restore — otherwise a slow target application
+// pastes the restored OLD clipboard instead of the dictation, and a fast
+// one fetches before the mark and makes the wait time out every time.
 func TestWaitPastedCalledBetweenPasteAndRestore(t *testing.T) {
 	rec := &fakeRecorder{pcm: []float32{0.1, 0.2, 0.3}}
 	tr := &fakeTranscriber{output: "hello world"}
@@ -342,7 +350,7 @@ func TestWaitPastedCalledBetweenPasteAndRestore(t *testing.T) {
 	waitUntilIdle(t, st)
 
 	got := lg.snapshot()
-	want := []string{"set", "paste", "wait", "restore"}
+	want := []string{"set", "arm", "paste", "wait", "restore"}
 	if len(got) != len(want) {
 		t.Fatalf("insert call order: got %v, want %v", got, want)
 	}
