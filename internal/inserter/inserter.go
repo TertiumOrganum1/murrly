@@ -40,12 +40,17 @@ type Inserter interface {
 	Name() string
 }
 
-// settleDelay waits for the push-to-talk key (F12 / Break) to finish
-// releasing before anything is inserted. Without it the modifier race —
-// the physical key still going up while we synthesise input — corrupts the
-// first characters, and an application still processing the keyup can move
-// the caret out from under an accessible-object write.
-const settleDelay = 300 * time.Millisecond
+// settleDelay lets the push-to-talk key (F12 / Break) finish releasing
+// before anything is inserted.
+//
+// It used to be 300 ms, inherited from the clipboard route where the
+// synthetic Ctrl of Ctrl+V really does race the physical key still going
+// up — drop the Ctrl and the field gets a literal "v". Neither direct
+// route presses a modifier, so they never needed that much: measured on a
+// short dictation the old value was three quarters of the whole insert
+// (300 ms of waiting around 130 ms of work). The clipboard route still
+// takes its full pause internally, in the paster, where it is earned.
+const settleDelay = 50 * time.Millisecond
 
 // Chain tries its routes in order and stops at the first one that delivers.
 type Chain struct {
@@ -57,6 +62,15 @@ type Chain struct {
 }
 
 func NewChain(routes ...Inserter) *Chain { return &Chain{routes: routes} }
+
+// failureSuffix appends what the earlier routes complained about, so a slow
+// or surprising delivery can be traced without turning on anything extra.
+func failureSuffix(failures []string) string {
+	if len(failures) == 0 {
+		return ""
+	}
+	return " after " + strings.Join(failures, "; ")
+}
 
 func (c *Chain) Name() string {
 	names := make([]string, 0, len(c.routes))
@@ -74,16 +88,22 @@ func (c *Chain) Insert(text string) error {
 	if len(c.routes) == 0 {
 		return errors.New("insert: no route configured")
 	}
+	started := time.Now()
 	if c.Settle > 0 {
 		time.Sleep(c.Settle)
 	}
+	settled := time.Now()
 	var failures []string
+	var timings []string
 	for _, r := range c.routes {
+		routeStart := time.Now()
 		err := r.Insert(text)
+		timings = append(timings, fmt.Sprintf("%s=%v", r.Name(), time.Since(routeStart).Round(time.Millisecond)))
 		if err == nil {
-			if len(failures) > 0 {
-				log.Printf("insert: delivered via %s after %s", r.Name(), strings.Join(failures, "; "))
-			}
+			log.Printf("insert: %d chars via %s in %v (settle=%v, %s)%s",
+				len([]rune(text)), r.Name(), time.Since(started).Round(time.Millisecond),
+				settled.Sub(started).Round(time.Millisecond), strings.Join(timings, " "),
+				failureSuffix(failures))
 			return nil
 		}
 		failures = append(failures, fmt.Sprintf("%s: %v", r.Name(), err))

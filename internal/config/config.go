@@ -288,10 +288,11 @@ func Load(path string) (Config, error) {
 	return cfg, nil
 }
 
-// defaultTypeDelayMs is the per-keystroke pause for the typing route.
-// Fast enough that a long dictation lands in well under a second, slow
-// enough that GTK/Qt/Electron keep up.
-const defaultTypeDelayMs = 4
+// defaultTypeDelayMs is the per-keystroke pause for the typing route. It
+// is the whole cost of a long dictation — the text arrives at this rate,
+// character by character — so it stays as low as toolkits tolerate. Raise
+// it if an application drops characters out of a long phrase.
+const defaultTypeDelayMs = 2
 
 func expandPaths(cfg *Config) {
 	cfg.Whisper.ModelPath = expandPath(cfg.Whisper.ModelPath)
