@@ -905,6 +905,16 @@ func (a clipAdapter) Save() (any, error) {
 	return s, err
 }
 
+// ServesText forwards the ownership re-check used right before the paste
+// chord (the embedded *clipboard.Clipboard implements it on Linux only).
+func (a clipAdapter) ServesText(text string) bool {
+	type confirmer interface{ ServesText(string) bool }
+	if c, ok := any(a.Clipboard).(confirmer); ok {
+		return c.ServesText(text)
+	}
+	return true // no way to check — assume we still own it
+}
+
 func (a clipAdapter) Restore(saved any) error {
 	s, ok := saved.(clipboard.Saved)
 	if !ok {

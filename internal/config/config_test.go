@@ -84,8 +84,8 @@ func TestInsertModeDefaultsAndNormalisation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load fresh: %v", err)
 	}
-	if cfg.Output.InsertMode != InsertHybrid {
-		t.Errorf("default insert_mode: got %q, want %q", cfg.Output.InsertMode, InsertHybrid)
+	if cfg.Output.InsertMode != InsertClipboard {
+		t.Errorf("default insert_mode: got %q, want %q", cfg.Output.InsertMode, InsertClipboard)
 	}
 	if cfg.Output.TypeDelayMs <= 0 {
 		t.Errorf("default type_delay_ms: got %d, want > 0", cfg.Output.TypeDelayMs)
@@ -98,10 +98,10 @@ func TestInsertModeDefaultsAndNormalisation(t *testing.T) {
 	}{
 		// An old config predates the setting entirely — it must not end up
 		// with an empty mode that inserts nothing.
-		{"missing", "[output]\npaste_delay_ms = 250\n", InsertHybrid},
+		{"missing", "[output]\npaste_delay_ms = 250\n", InsertClipboard},
 		{"explicit", "[output]\ninsert_mode = \"type\"\n", InsertType},
-		{"mixed case and spaces", "[output]\ninsert_mode = \" Clipboard \"\n", InsertClipboard},
-		{"unknown value falls back", "[output]\ninsert_mode = \"telepathy\"\n", InsertHybrid},
+		{"mixed case and spaces", "[output]\ninsert_mode = \" Hybrid \"\n", InsertHybrid},
+		{"unknown value falls back", "[output]\ninsert_mode = \"telepathy\"\n", InsertClipboard},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -144,19 +144,21 @@ const (
 )
 
 // normalizeInsertMode maps a configured value to a known mode. Anything
-// unrecognised (typo, a mode from a newer build, an old config that has no
-// such key) falls back to hybrid — inserting text by the most compatible
-// route beats not inserting it at all.
+// unrecognised — a typo, a mode from a newer build, or an old config
+// written before this setting existed — falls back to the clipboard route,
+// which is both the default and the one that puts text of any length in
+// instantly. Direct input is opt-in: it cannot lose the clipboard, but it
+// types long dictations out character by character.
 func normalizeInsertMode(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case InsertAtspi:
 		return InsertAtspi
 	case InsertType:
 		return InsertType
-	case InsertClipboard:
-		return InsertClipboard
-	default:
+	case InsertHybrid:
 		return InsertHybrid
+	default:
+		return InsertClipboard
 	}
 }
 
@@ -210,7 +212,7 @@ func defaults() Config {
 		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip
 		// tolerates lower values.
 		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ProfanityRemove: true, ContextInsert: true, RecentTranscripts: 20,
-			InsertMode: InsertHybrid, TypeDelayMs: defaultTypeDelayMs},
+			InsertMode: InsertClipboard, TypeDelayMs: defaultTypeDelayMs},
 	}
 }
 
@@ -292,7 +294,7 @@ func Load(path string) (Config, error) {
 // is the whole cost of a long dictation — the text arrives at this rate,
 // character by character — so it stays as low as toolkits tolerate. Raise
 // it if an application drops characters out of a long phrase.
-const defaultTypeDelayMs = 2
+const defaultTypeDelayMs = 1
 
 func expandPaths(cfg *Config) {
 	cfg.Whisper.ModelPath = expandPath(cfg.Whisper.ModelPath)

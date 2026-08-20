@@ -48,12 +48,7 @@ func (c *fakeClipboard) Restore(any) error {
 	return nil
 }
 
-func (c *fakeClipboard) ArmPasteWait() { c.log.add("arm") }
-
-func (c *fakeClipboard) WaitPasted(time.Duration) bool {
-	c.log.add("wait")
-	return true
-}
+func (c *fakeClipboard) ServesText(string) bool { return true }
 
 type fakePaster struct {
 	log *callLog
@@ -75,7 +70,7 @@ func TestClipboardRouteOrdersTheWholeDance(t *testing.T) {
 	if err := r.Insert("диктовка"); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	want := []string{"save", "set", "arm", "paste", "wait", "restore"}
+	want := []string{"save", "set", "paste", "restore"}
 	got := lg.snapshot()
 	if len(got) != len(want) {
 		t.Fatalf("call order: got %v, want %v", got, want)

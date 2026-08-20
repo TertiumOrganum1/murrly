@@ -113,7 +113,9 @@ func (r *recordedStates) Contains(s State) bool {
 
 func waitUntilIdle(t *testing.T, st *recordedStates) {
 	t.Helper()
-	deadline := time.Now().Add(500 * time.Millisecond)
+	// Generous: the default clipboard route deliberately holds the text in
+	// the clipboard for most of a second so caching applications can read it.
+	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		snap := st.Snapshot()
 		if len(snap) >= 2 && snap[len(snap)-1] == StateIdle && snap[len(snap)-2] != StateIdle {
@@ -142,7 +144,7 @@ func TestHappyPath(t *testing.T) {
 		PasteDelay:   10 * time.Millisecond,
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	events := make(chan Event, 4)
@@ -194,7 +196,7 @@ func TestEmptyTranscriptionSkipsPaste(t *testing.T) {
 		PasteDelay:   10 * time.Millisecond,
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	events := make(chan Event, 4)
@@ -232,7 +234,7 @@ func TestEmptyRecordingSkipsTranscriptionAndPaste(t *testing.T) {
 		PasteDelay:  10 * time.Millisecond,
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
 	events := make(chan Event, 4)

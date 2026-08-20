@@ -40,6 +40,12 @@ type pasteTracker struct {
 // snoopers that burst-read on ownership change) are absorbed.
 type xclipOwner struct {
 	served atomic.Int64
+	// times records when each content transfer completed, so the insert
+	// path can report how long after the paste chord the application
+	// actually read the text — the only honest basis for choosing how long
+	// to hold the user's clipboard hostage.
+	mu    sync.Mutex
+	times []time.Time
 }
 
 // xclipReadTimeout caps every blocking xclip -o call. X11 selections are
@@ -243,6 +249,9 @@ func writeSelectionTracked(sel, text string) (*xclipOwner, error) {
 		for sc.Scan() {
 			if n, ok := parseRequestNumber(sc.Text()); ok && n >= 1 {
 				owner.served.Store(int64(n - 1))
+				owner.mu.Lock()
+				owner.times = append(owner.times, time.Now())
+				owner.mu.Unlock()
 			}
 		}
 		_ = cmd.Wait()
@@ -256,6 +265,28 @@ func writeSelectionTracked(sel, text string) (*xclipOwner, error) {
 // grabbing the selection as our dictation owner dies); beyond that we are
 // fighting a determined owner and should not spin.
 const restoreAttempts = 2
+
+// FetchTimes returns when the current publication was read, newest last.
+// Empty when nothing has read it (or nothing was published).
+func (c *Clipboard) FetchTimes() []time.Time {
+	c.mu.Lock()
+	owner := c.owner
+	c.mu.Unlock()
+	if owner == nil {
+		return nil
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return append([]time.Time(nil), owner.times...)
+}
+
+// ServesText reports whether the clipboard right now serves exactly this
+// text — that is, our own publication is still the live selection and
+// nobody claimed it back. Cheap: one read.
+func (c *Clipboard) ServesText(text string) bool {
+	out, err := xclipOutput("-selection", "clipboard", "-o")
+	return err == nil && string(out) == text
+}
 
 func (c *Clipboard) Restore(s Saved) error {
 	// The dictation owner is being replaced — drop it so a late WaitPasted
