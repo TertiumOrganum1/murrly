@@ -253,3 +253,52 @@ func TestEmptyRecordingSkipsTranscriptionAndPaste(t *testing.T) {
 		t.Error("paste should not happen when recording is empty")
 	}
 }
+
+type recordingInserter struct {
+	mu   sync.Mutex
+	got  []string
+	name string
+}
+
+func (r *recordingInserter) Insert(text string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.got = append(r.got, text)
+	return nil
+}
+
+func (r *recordingInserter) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.got)
+}
+
+// TestSetInserterSwapsTheRouteAtRuntime backs the tray toggle: switching
+// between direct input and the clipboard has to take effect on the next
+// dictation, without a restart.
+func TestSetInserterSwapsTheRouteAtRuntime(t *testing.T) {
+	before := &recordingInserter{name: "before"}
+	after := &recordingInserter{name: "after"}
+
+	a := New(Config{
+		Recorder:    &fakeRecorder{pcm: []float32{0.1}},
+		Transcriber: &fakeTranscriber{output: "фраза"},
+		Inserter:    before,
+		PasteDelay:  time.Millisecond,
+	})
+
+	if err := a.insertText("первая"); err != nil {
+		t.Fatalf("insertText: %v", err)
+	}
+	a.SetInserter(after)
+	if err := a.insertText("вторая"); err != nil {
+		t.Fatalf("insertText after swap: %v", err)
+	}
+
+	if before.count() != 1 {
+		t.Errorf("original route got %d inserts, want 1", before.count())
+	}
+	if after.count() != 1 {
+		t.Errorf("swapped-in route got %d inserts, want 1", after.count())
+	}
+}

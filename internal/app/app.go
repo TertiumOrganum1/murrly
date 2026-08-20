@@ -237,6 +237,11 @@ type App struct {
 	// written from the menu toggle via SetMultiInference — atomic, like
 	// padSilence, to avoid mutex scaffolding for a single boolean.
 	multiOn atomic.Bool
+	// ins is the live insertion route. Read on the App goroutine in
+	// insertText, swapped from the tray toggle via SetInserter — atomic
+	// because the two run on different goroutines and the choice must take
+	// effect on the very next dictation, without a restart.
+	ins atomic.Value
 	// preferNemotron records which engine's best to INSERT for the current
 	// recording/reprocess: true when triggered by the Break family
 	// (EventKeyDownNemotron / EventReprocessNemotron), false for F12 /
@@ -393,6 +398,8 @@ func New(cfg Config) *App {
 	if cfg.PasteDelay == 0 {
 		cfg.PasteDelay = 80 * time.Millisecond
 	}
+	// insertion route (see SetInserter): the config value is the initial
+	// choice; the tray toggle may replace it later.
 	if cfg.Inserter == nil {
 		// Default to the route every caller used before insertion became
 		// configurable, so a Config that only wires Clipboard/Paster keeps
@@ -406,6 +413,7 @@ func New(cfg Config) *App {
 	a := &App{cfg: cfg, state: StateIdle}
 	a.padSilence.Store(cfg.PadSilence)
 	a.multiOn.Store(cfg.MultiInference)
+	a.ins.Store(cfg.Inserter)
 	return a
 }
 
@@ -422,6 +430,19 @@ func (a *App) PadSilenceOn() bool { return a.padSilence.Load() }
 // this so the next F12 immediately picks up the new mode; main persists the
 // flag to config.toml separately so it survives a restart.
 func (a *App) SetMultiInference(on bool) { a.multiOn.Store(on) }
+
+// SetInserter swaps how recognized text reaches the field, live. The tray
+// offers this because the routes trade off against each other rather than
+// one being better: direct input never touches the clipboard but types the
+// text out character by character, so a long dictation takes seconds to
+// appear, while the clipboard route lands any length instantly at the cost
+// of borrowing the clipboard. Which one hurts less is the user's call, and
+// it changes with what they are doing.
+func (a *App) SetInserter(in Inserter) {
+	if in != nil {
+		a.ins.Store(in)
+	}
+}
 
 // MultiInferenceOn reports the current multi-inference state for menu
 // rendering and for the finish()/reprocess() branch.
@@ -814,7 +835,11 @@ func (a *App) insertText(text string) error {
 	// tray toggle is off, so a false positive never destroys the phrase.
 	text = ruprofane.Filter(text)
 
-	if err := a.cfg.Inserter.Insert(text); err != nil {
+	route, _ := a.ins.Load().(Inserter)
+	if route == nil {
+		route = a.cfg.Inserter
+	}
+	if err := route.Insert(text); err != nil {
 		return err
 	}
 	return nil

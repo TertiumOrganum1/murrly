@@ -87,6 +87,21 @@ type Actions struct {
 	// obscene words are cut out entirely instead of masked with bullets;
 	// effective only while the lexis filter is on. Same shape as above.
 	OnToggleProfanityRemove func() bool
+
+	// Direct-input toggle ("Прямой ввод"). Checked means the recognized
+	// text is delivered straight to the field — written into the
+	// accessible object when the app exposes one, otherwise typed out on
+	// the keyboard — and the clipboard is never touched. Unchecked falls
+	// back to the classic route: borrow the clipboard, paste, put it back.
+	//
+	// It is a toggle rather than a fixed choice because neither side wins
+	// outright: direct input cannot lose or displace the clipboard, but
+	// types the text out character by character, so a long dictation takes
+	// seconds to land. IsDirectInsert reports the current state for the
+	// initial checkmark; OnToggleDirectInsert flips it and returns the new
+	// state.
+	IsDirectInsert       func() bool
+	OnToggleDirectInsert func() bool
 	IsProfanityRemove       func() bool
 
 	// Multi-inference toggle ("Множественное распознавание"). Same shape

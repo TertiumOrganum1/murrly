@@ -194,6 +194,19 @@ func persistProfanityFilter(cfgPath string, cfg config.Config, on bool) error {
 	return toml.NewEncoder(f).Encode(cfg)
 }
 
+// persistInsertMode writes the insertion-route choice to config.toml so the
+// menu toggle survives a restart. Same whole-struct re-encode as the other
+// persist helpers.
+func persistInsertMode(cfgPath string, cfg config.Config, mode string) error {
+	cfg.Output.InsertMode = mode
+	f, err := os.Create(cfgPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}
+
 // persistProfanityRemove writes the cut-out-vs-mask choice to config.toml.
 func persistProfanityRemove(cfgPath string, cfg config.Config, on bool) error {
 	cfg.Output.ProfanityRemove = on

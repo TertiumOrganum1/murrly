@@ -192,6 +192,9 @@ func (t *Tray) onReady() {
 	profanityChecked := t.actions.IsProfanityOn != nil && t.actions.IsProfanityOn()
 	profanityItem := systray.AddMenuItemCheckbox("Фильтр лексики", "Маскировать обсценную лексику символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
 
+	directChecked := t.actions.IsDirectInsert != nil && t.actions.IsDirectInsert()
+	directItem := systray.AddMenuItemCheckbox("Прямой ввод", "Вставлять текст прямо в поле (через шину доступности, иначе набором на клавиатуре), не трогая буфер обмена. Выключено — прежний способ: подменить буфер, нажать Ctrl+V, вернуть обратно. Прямой ввод не может потерять буфер, но длинную фразу набирает несколько секунд", directChecked)
+
 	profanityRemoveChecked := t.actions.IsProfanityRemove != nil && t.actions.IsProfanityRemove()
 	profanityRemoveItem := systray.AddMenuItemCheckbox("Вырезать, а не маскировать", "Когда «Фильтр лексики» включён — вырезать обсценные слова целиком (с прилегающей пунктуацией), а не закрывать «•». Обратимо: оригинал хранится без цензуры", profanityRemoveChecked)
 	// The cut-out option only applies while the filter is on — grey it out
@@ -473,6 +476,14 @@ func (t *Tray) onReady() {
 						padSilenceItem.Check()
 					} else {
 						padSilenceItem.Uncheck()
+					}
+				}
+			case <-directItem.ClickedCh:
+				if t.actions.OnToggleDirectInsert != nil {
+					if t.actions.OnToggleDirectInsert() {
+						directItem.Check()
+					} else {
+						directItem.Uncheck()
 					}
 				}
 			case <-profanityItem.ClickedCh:

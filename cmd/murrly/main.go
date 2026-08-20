@@ -345,7 +345,8 @@ func main() {
 			cfg.Whisper.PadSilence = newState
 			return newState
 		},
-		IsProfanityOn: ruprofane.Enabled,
+		IsDirectInsert: func() bool { return cfg.Output.InsertMode != config.InsertClipboard },
+		IsProfanityOn:  ruprofane.Enabled,
 		OnToggleProfanity: func() bool {
 			newState := !ruprofane.Enabled()
 			ruprofane.SetEnabled(newState)
@@ -432,9 +433,39 @@ func main() {
 	t = tray.New(icons, actions)
 
 	pasteDelay := time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond
-	insertRoutes := inserter.ForMode(cfg.Output.InsertMode, cfg.Output.TypeDelayMs,
-		clipAdapter{cb}, paster.New(), pasteDelay)
+	buildRoutes := func(mode string) *inserter.Chain {
+		return inserter.ForMode(mode, cfg.Output.TypeDelayMs,
+			clipAdapter{cb}, paster.New(), pasteDelay)
+	}
+	insertRoutes := buildRoutes(cfg.Output.InsertMode)
 	log.Printf("insert: mode %q (routes: %s)", cfg.Output.InsertMode, insertRoutes.Name())
+
+	// Tray toggle: direct input vs the classic clipboard paste. Turning it
+	// off restores exactly the old behaviour; turning it on returns to
+	// whichever direct mode the config names (hybrid unless the user picked
+	// atspi or type by hand), so an explicit choice is not silently
+	// rewritten to something else by a double toggle.
+	directMode := cfg.Output.InsertMode
+	if directMode == config.InsertClipboard {
+		directMode = config.InsertHybrid
+	}
+	actions.OnToggleDirectInsert = func() bool {
+		on := cfg.Output.InsertMode == config.InsertClipboard // flipping TO direct
+		mode := config.InsertClipboard
+		if on {
+			mode = directMode
+		}
+		routes := buildRoutes(mode)
+		if a != nil {
+			a.SetInserter(routes)
+		}
+		if err := persistInsertMode(cfgPath, cfg, mode); err != nil {
+			log.Printf("insert-mode persist: %v", err)
+		}
+		cfg.Output.InsertMode = mode
+		log.Printf("insert: mode %q (routes: %s)", mode, routes.Name())
+		return on
+	}
 
 	appCfg := app.Config{
 		Recorder:    recorder.New(),
