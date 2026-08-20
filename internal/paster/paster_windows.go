@@ -25,10 +25,10 @@ const pasteSettleDelay = 300 * time.Millisecond
 const pasteConsumeDelay = 400 * time.Millisecond
 
 const (
-	inputKeyboard   = 1
-	keyeventfKeyUp  = 0x0002
-	vkControl       = 0x11
-	vkV             = 0x56
+	inputKeyboard  = 1
+	keyeventfKeyUp = 0x0002
+	vkControl      = 0x11
+	vkV            = 0x56
 )
 
 // keybdInput mirrors Win32 KEYBDINPUT.

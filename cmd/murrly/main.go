@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -22,7 +23,9 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/config"
 	"github.com/tertiumorganum1/murrly/internal/crossjudge"
 	"github.com/tertiumorganum1/murrly/internal/dockmenu"
+	"github.com/tertiumorganum1/murrly/internal/gpucheck"
 	"github.com/tertiumorganum1/murrly/internal/hotkey"
+	"github.com/tertiumorganum1/murrly/internal/inserter"
 	"github.com/tertiumorganum1/murrly/internal/logfile"
 	"github.com/tertiumorganum1/murrly/internal/macospermissions"
 	"github.com/tertiumorganum1/murrly/internal/menuactions"
@@ -112,6 +115,13 @@ func main() {
 		log.Printf("mic probe: %v", err)
 	}
 
+	// Choose the card BEFORE anything touches CUDA — the driver reads
+	// CUDA_VISIBLE_DEVICES once, at initialisation. CUDA orders devices
+	// fastest-first by default, so leaving the choice to it puts Whisper on
+	// the quickest card rather than the one we want; PreferDevice pins the
+	// configured card by UUID, and steps aside when it isn't installed.
+	gpucheck.PreferDevice(cfg.Whisper.PreferredGPU)
+
 	trCfg := transcriber.Config{
 		ModelPath:     cfg.Whisper.ModelPath,
 		Language:      cfg.Whisper.Language,
@@ -119,6 +129,17 @@ func main() {
 		BeamAdaptive:  cfg.Whisper.BeamAdaptive,
 		InitialPrompt: cfg.Whisper.InitialPrompt,
 	}
+
+	// Refuse a hopeless load before ggml starts allocating: a cudaMalloc that
+	// fails part-way through a model load leaves the driver holding memory it
+	// never reclaims. Only the arithmetically certain case is refused (less
+	// free VRAM than the weights themselves), so this cannot block a startup
+	// that would have succeeded.
+	if err := gpucheck.EnsureFree(trCfg.ModelPath); err != nil {
+		desktopNotify("Murrly", "Не хватает видеопамяти — модель не загружена. Подробности в логе.")
+		log.Fatalf("gpucheck: %v", err)
+	}
+
 	// Exactly one inference engine is built, by count:
 	//   count == 1 → single in-process Transcriber (with model hot-swap).
 	//   count  > 1 → multiinfer.Runner (one model, sequential variants).
@@ -177,6 +198,10 @@ func main() {
 			log.Printf("shutdown: model released, GPU buffers freed")
 		})
 	}
+	// Covers a panic in this goroutine, plus any early return added here
+	// later. The sync.Once means it cannot double-fire with the explicit call
+	// at the end of main.
+	defer releaseModel()
 
 	// switchModel / reloadConfig route the model-picker and reload-config
 	// menu actions to whichever engine is active.
@@ -406,12 +431,18 @@ func main() {
 	}
 	t = tray.New(icons, actions)
 
+	pasteDelay := time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond
+	insertRoutes := inserter.ForMode(cfg.Output.InsertMode, cfg.Output.TypeDelayMs,
+		clipAdapter{cb}, paster.New(), pasteDelay)
+	log.Printf("insert: mode %q (routes: %s)", cfg.Output.InsertMode, insertRoutes.Name())
+
 	appCfg := app.Config{
 		Recorder:    recorder.New(),
 		Transcriber: loader,
 		Clipboard:   clipAdapter{cb},
 		Paster:      paster.New(),
-		PasteDelay:  time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond,
+		Inserter:    insertRoutes,
+		PasteDelay:  pasteDelay,
 		PadSilence:  cfg.Whisper.PadSilence,
 		Notify:      desktopNotify,
 		OnState: func(s app.State) {
@@ -646,7 +677,15 @@ func main() {
 		}
 	}
 
-	go a.Run(ctx, events)
+	// a.Run is the one goroutine that reaches the model. A panic in it would
+	// otherwise tear the process down without running a single defer above,
+	// stranding the GPU buffers.
+	go func() {
+		defer func() {
+			handlePanic("app loop", recover(), debug.Stack(), releaseModel, os.Exit)
+		}()
+		a.Run(ctx, events)
+	}()
 
 	// Dock right-click menu (macOS only) — same Actions as the tray, so
 	// "Открыть конфиг" or "Перезагрузить конфиг" do the same thing
@@ -662,7 +701,11 @@ func main() {
 	}
 
 	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+	// SIGHUP joins SIGINT/SIGTERM: ending the desktop session used to kill us
+	// outright, taking the GPU buffers along. SIGQUIT is deliberately left to
+	// the Go runtime — its default goroutine dump is worth more than
+	// intercepting the signal.
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		<-sigs
 		cancel()

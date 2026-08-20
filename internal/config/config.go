@@ -79,6 +79,15 @@ type WhisperConfig struct {
 	// persisted here. No effect when multi_inference_count == 1.
 	MultiInference bool   `toml:"multi_inference"`
 	InitialPrompt  string `toml:"initial_prompt"`
+	// PreferredGPU picks the card Whisper loads onto, by case-insensitive
+	// substring of the device name ("3070" matches "NVIDIA GeForce RTX
+	// 3070"). Needed because CUDA orders devices fastest-first by default, so
+	// its "device 0" is the quickest card rather than the first one on the
+	// bus — on a mixed pair Whisper would otherwise claim the big card that
+	// is wanted for other work. When no installed GPU matches, CUDA's own
+	// default choice stands. Empty means "no preference". Linux/CUDA only;
+	// ignored on Metal, where there is nothing to choose between.
+	PreferredGPU string `toml:"preferred_gpu"`
 }
 
 type OutputConfig struct {
@@ -104,6 +113,51 @@ type OutputConfig struct {
 	// menu keeps as clickable copy slots. Default 20; clamped to [1,50] on
 	// load. Applies on all platforms.
 	RecentTranscripts int `toml:"recent_transcripts"`
+	// InsertMode picks HOW the recognized text reaches the focused field.
+	// The clipboard route (save → set → Ctrl+V → restore) is inherently
+	// racy: applications like Chromium/Electron cache the selection when
+	// ownership changes and paste from that cache, so the moment they
+	// really read it cannot be observed from outside — which showed up as
+	// the old clipboard being pasted instead of the dictation, or the
+	// dictation displacing the user's clipboard. The direct routes below
+	// never touch the clipboard at all.
+	//
+	//	hybrid    — AT-SPI, then typing, then clipboard (default)
+	//	atspi     — insert straight into the focused accessible field
+	//	type      — synthesise the characters on the keyboard
+	//	clipboard — the legacy paste route
+	//
+	// Unknown / missing values normalise to hybrid on load.
+	InsertMode string `toml:"insert_mode"`
+	// TypeDelayMs is the per-keystroke delay for the typing route. Small
+	// values are fast but some applications drop characters when fed
+	// faster than they redraw; raise it if a long phrase arrives mangled.
+	TypeDelayMs int `toml:"type_delay_ms"`
+}
+
+// Insert modes accepted by OutputConfig.InsertMode.
+const (
+	InsertHybrid    = "hybrid"
+	InsertAtspi     = "atspi"
+	InsertType      = "type"
+	InsertClipboard = "clipboard"
+)
+
+// normalizeInsertMode maps a configured value to a known mode. Anything
+// unrecognised (typo, a mode from a newer build, an old config that has no
+// such key) falls back to hybrid — inserting text by the most compatible
+// route beats not inserting it at all.
+func normalizeInsertMode(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case InsertAtspi:
+		return InsertAtspi
+	case InsertType:
+		return InsertType
+	case InsertClipboard:
+		return InsertClipboard
+	default:
+		return InsertHybrid
+	}
 }
 
 // NemotronConfig configures the second engine (Linux-only; the Break key).
@@ -145,6 +199,7 @@ func defaults() Config {
 			ScoringMode:         "combined",                   // confidence + heuristic blend; switchable from the tray
 			MultiInference:      true,                         // live on/off for the variant batch; toggled from the menu
 			InitialPrompt:       "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
+			PreferredGPU:        "3070", // leave the faster card free for other GPU work; ignored when absent
 		},
 		// Nemotron: second engine on the Break key. OFF by default — it
 		// loads a multi-GB model on the GPU; opt in via the tray toggle,
@@ -154,7 +209,8 @@ func defaults() Config {
 		// step. Too short and the focused app reads the restored (old) clipboard
 		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip
 		// tolerates lower values.
-		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ProfanityRemove: true, ContextInsert: true, RecentTranscripts: 20},
+		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ProfanityRemove: true, ContextInsert: true, RecentTranscripts: 20,
+			InsertMode: InsertHybrid, TypeDelayMs: defaultTypeDelayMs},
 	}
 }
 
@@ -220,9 +276,22 @@ func Load(path string) (Config, error) {
 		cfg.Output.RecentTranscripts = 50
 	}
 
+	cfg.Output.InsertMode = normalizeInsertMode(cfg.Output.InsertMode)
+	// 0 means "not in this config" (or an old one) rather than "type
+	// instantly" — a literal zero delay makes several toolkits drop
+	// characters, so treat it as unset.
+	if cfg.Output.TypeDelayMs <= 0 {
+		cfg.Output.TypeDelayMs = defaultTypeDelayMs
+	}
+
 	expandPaths(&cfg)
 	return cfg, nil
 }
+
+// defaultTypeDelayMs is the per-keystroke pause for the typing route.
+// Fast enough that a long dictation lands in well under a second, slow
+// enough that GTK/Qt/Electron keep up.
+const defaultTypeDelayMs = 4
 
 func expandPaths(cfg *Config) {
 	cfg.Whisper.ModelPath = expandPath(cfg.Whisper.ModelPath)
