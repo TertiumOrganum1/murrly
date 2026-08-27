@@ -79,12 +79,18 @@ type WhisperConfig struct {
 	// persisted here. No effect when multi_inference_count == 1.
 	MultiInference bool   `toml:"multi_inference"`
 	InitialPrompt  string `toml:"initial_prompt"`
-	// PreferredGPU picks the card Whisper loads onto, by case-insensitive
-	// substring of the device name ("3070" matches "NVIDIA GeForce RTX
-	// 3070"). Needed because CUDA orders devices fastest-first by default, so
-	// its "device 0" is the quickest card rather than the first one on the
-	// bus — on a mixed pair Whisper would otherwise claim the big card that
-	// is wanted for other work. When no installed GPU matches, CUDA's own
+	// PreferredGPU picks the card Whisper loads onto. Needed because CUDA
+	// orders devices fastest-first by default, so its "device 0" is the
+	// quickest card rather than the first one on the bus — on a mixed pair
+	// Whisper would otherwise claim the big card that is wanted for other
+	// work.
+	//
+	// "weakest" (the default) picks the smallest installed card the model
+	// still fits on, and is preferred to naming one: a named card can be
+	// pulled out of the machine, and then the preference quietly stops
+	// applying and CUDA goes back to the fastest card. Any other value is a
+	// case-insensitive substring of the device name ("3070" matches "NVIDIA
+	// GeForce RTX 3070"); when no installed GPU matches it, CUDA's own
 	// default choice stands. Empty means "no preference". Linux/CUDA only;
 	// ignored on Metal, where there is nothing to choose between.
 	PreferredGPU string `toml:"preferred_gpu"`
@@ -201,7 +207,7 @@ func defaults() Config {
 			ScoringMode:         "combined",                   // confidence + heuristic blend; switchable from the tray
 			MultiInference:      true,                         // live on/off for the variant batch; toggled from the menu
 			InitialPrompt:       "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
-			PreferredGPU:        "3070", // leave the faster card free for other GPU work; ignored when absent
+			PreferredGPU:        "weakest", // gpucheck.WeakestName — leave the faster card free for other GPU work
 		},
 		// Nemotron: second engine on the Break key. OFF by default — it
 		// loads a multi-GB model on the GPU; opt in via the tray toggle,

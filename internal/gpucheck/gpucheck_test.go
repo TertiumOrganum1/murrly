@@ -1,16 +1,19 @@
 package gpucheck
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 const mib = int64(1024 * 1024)
 
-// The real shape of `nvidia-smi --query-gpu=uuid,name,memory.free
+// The real shape of `nvidia-smi --query-gpu=uuid,name,memory.free,memory.total
 // --format=csv,noheader,nounits` on the mixed pair this package was written
 // for. Note the ordering trap it encodes: nvidia-smi lists the 3070 first
 // (lower PCI bus), while CUDA's default fastest-first order makes the 4090
 // its device 0.
-const twoCards = "GPU-2644dfce-0719-4f7a-65f4-56c28f5c5d84, NVIDIA GeForce RTX 3070, 3582\n" +
-	"GPU-723db0b4-29e3-73fc-135d-2fe337bdd00b, NVIDIA GeForce RTX 4090, 21766\n"
+const twoCards = "GPU-2644dfce-0719-4f7a-65f4-56c28f5c5d84, NVIDIA GeForce RTX 3070, 3582, 8192\n" +
+	"GPU-723db0b4-29e3-73fc-135d-2fe337bdd00b, NVIDIA GeForce RTX 4090, 21766, 24564\n"
 
 func TestParseDevices(t *testing.T) {
 	devs, err := ParseDevices(twoCards)
@@ -29,14 +32,18 @@ func TestParseDevices(t *testing.T) {
 	if devs[1].FreeMiB != 21766 {
 		t.Errorf("second device free = %d, want 21766", devs[1].FreeMiB)
 	}
+	if devs[1].TotalMiB != 24564 {
+		t.Errorf("second device total = %d, want 24564", devs[1].TotalMiB)
+	}
 }
 
 func TestParseDevicesRejectsMalformed(t *testing.T) {
 	for _, out := range []string{
 		"",
-		"GPU-abc, NVIDIA GeForce RTX 3070\n", // missing a field
-		"GPU-abc, NVIDIA GeForce RTX 3070, [N/A]\n", // free memory unavailable
-		"GPU-abc, NVIDIA GeForce RTX 3070, 1, 2\n",  // extra field
+		"GPU-abc, NVIDIA GeForce RTX 3070, 3582\n",        // missing a field
+		"GPU-abc, NVIDIA GeForce RTX 3070, [N/A], 8192\n", // free memory unavailable
+		"GPU-abc, NVIDIA GeForce RTX 3070, 3582, [N/A]\n", // total memory unavailable
+		"GPU-abc, NVIDIA GeForce RTX 3070, 1, 2, 3\n",     // extra field
 	} {
 		if _, err := ParseDevices(out); err == nil {
 			t.Errorf("ParseDevices(%q) = nil error, want failure", out)
@@ -72,6 +79,66 @@ func TestSelectByName(t *testing.T) {
 				t.Errorf("SelectByName(%q) = %q, want %q", tc.want, d.Name, tc.wantName)
 			}
 		})
+	}
+}
+
+func TestIsWeakest(t *testing.T) {
+	for in, want := range map[string]bool{
+		"weakest":   true,
+		"  Weakest": true,
+		"3070":      false,
+		"":          false,
+	} {
+		if got := IsWeakest(in); got != want {
+			t.Errorf("IsWeakest(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestSelectWeakest(t *testing.T) {
+	// The machine this was written against: a 6 GB 1660 alongside a 24 GB
+	// 4090, listed by nvidia-smi in bus order.
+	const mixedPair = "GPU-1483bc1a-845a-8f62-2b33-098e1f8d323a, NVIDIA GeForce GTX 1660, %d, 6144\n" +
+		"GPU-723db0b4-29e3-73fc-135d-2fe337bdd00b, NVIDIA GeForce RTX 4090, %d, 24564\n"
+
+	tests := []struct {
+		name               string
+		free1660, free4090 int64
+		model              int64
+		wantName           string
+	}{
+		// The whole point of the setting: the big card stays free even
+		// though it has far more room.
+		{"small card has room to spare", 4000, 21766, 1549 * mib, "NVIDIA GeForce GTX 1660"},
+		// A thin margin on the small card still beats moving to the big one:
+		// the load may fail, but that is a load the user asked for.
+		{"small card is tight, big card is roomy", 2118, 21766, 1549 * mib, "NVIDIA GeForce GTX 1660"},
+		// Weights don't fit the small card at all — taking it would only mean
+		// EnsureFree aborting the startup a moment later.
+		{"weights don't fit the small card", 900, 21766, 1549 * mib, "NVIDIA GeForce RTX 4090"},
+		// Nowhere to put it: pick the roomiest and let EnsureFree speak.
+		{"no card has room", 900, 1000, 1549 * mib, "NVIDIA GeForce RTX 4090"},
+		// Size unknown (model file unreadable) — nothing to weigh, smallest wins.
+		{"unknown model size", 100, 21766, 0, "NVIDIA GeForce GTX 1660"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			devs, err := ParseDevices(fmt.Sprintf(mixedPair, tc.free1660, tc.free4090))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			d, why, ok := SelectWeakest(devs, tc.model)
+			if !ok {
+				t.Fatal("SelectWeakest found no device")
+			}
+			if d.Name != tc.wantName {
+				t.Errorf("SelectWeakest = %q (%s), want %q", d.Name, why, tc.wantName)
+			}
+		})
+	}
+
+	if _, _, ok := SelectWeakest(nil, 1549*mib); ok {
+		t.Error("SelectWeakest picked a device from an empty list")
 	}
 }
 

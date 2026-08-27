@@ -10,7 +10,7 @@ package gpucheck
 // probe there is a separate exercise.
 
 // PreferDevice reports that no device pinning happened.
-func PreferDevice(want string) (string, bool) { return "", false }
+func PreferDevice(want, modelPath string) (string, bool) { return "", false }
 
 // EnsureFree always allows the load.
 func EnsureFree(modelPath string) error { return nil }

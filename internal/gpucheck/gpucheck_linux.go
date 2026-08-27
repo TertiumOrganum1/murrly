@@ -22,16 +22,22 @@ const probeTimeout = 3 * time.Second
 // match nvidia-smi's PCI-bus order on a mixed pair of cards.
 const envVisible = "CUDA_VISIBLE_DEVICES"
 
-// PreferDevice pins CUDA to the first GPU whose name contains want, and
-// returns its UUID. It is a no-op — reported as false — when want is empty,
-// when no installed GPU matches (the machine simply doesn't have that card,
-// so CUDA's own default choice stands), when the device list can't be read,
-// or when CUDA_VISIBLE_DEVICES is already set, which means the operator
+// PreferDevice pins CUDA to the GPU the config asks for and returns its UUID.
+// want is either the special value "weakest" — the smallest installed card
+// that can still hold the model at modelPath — or a case-insensitive
+// substring of a device name. It is a no-op — reported as false — when want is
+// empty, when no installed GPU matches (the machine simply doesn't have that
+// card, so CUDA's own default choice stands), when the device list can't be
+// read, or when CUDA_VISIBLE_DEVICES is already set, which means the operator
 // picked a device explicitly and we must not override them.
+//
+// modelPath is only consulted for the "weakest" form, and an unreadable one is
+// not an error here: it just drops the fit half of the choice, leaving the
+// smallest card. The loader reports a missing model far better than we can.
 //
 // Must be called before anything touches CUDA: the driver reads
 // CUDA_VISIBLE_DEVICES once, at initialisation.
-func PreferDevice(want string) (string, bool) {
+func PreferDevice(want, modelPath string) (string, bool) {
 	if strings.TrimSpace(want) == "" {
 		return "", false
 	}
@@ -46,7 +52,19 @@ func PreferDevice(want string) (string, bool) {
 		return "", false
 	}
 
-	d, ok := SelectByName(devs, want)
+	var (
+		d  Device
+		ok bool
+	)
+	if IsWeakest(want) {
+		var why string
+		d, why, ok = SelectWeakest(devs, modelSize(modelPath))
+		if ok {
+			log.Printf("gpucheck: %q among %s → %s (%s)", WeakestName, describe(devs), d.Name, why)
+		}
+	} else {
+		d, ok = SelectByName(devs, want)
+	}
 	if !ok {
 		log.Printf("gpucheck: no GPU matching %q among %s — using CUDA's default device", want, describe(devs))
 		return "", false
@@ -114,7 +132,7 @@ func queryDevices() ([]Device, error) {
 		return nil, fmt.Errorf("nvidia-smi not found")
 	}
 
-	cmd := exec.Command(bin, "--query-gpu=uuid,name,memory.free", "--format=csv,noheader,nounits")
+	cmd := exec.Command(bin, "--query-gpu=uuid,name,memory.free,memory.total", "--format=csv,noheader,nounits")
 	done := make(chan struct{})
 	timer := time.AfterFunc(probeTimeout, func() {
 		if cmd.Process != nil {
@@ -131,6 +149,16 @@ func queryDevices() ([]Device, error) {
 		return nil, fmt.Errorf("nvidia-smi: %w", err)
 	}
 	return ParseDevices(strings.TrimSpace(string(out)))
+}
+
+// modelSize is the weight file's size in bytes, or 0 when it can't be read —
+// the value Decide reads as "unknown, don't weigh anything against it".
+func modelSize(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
 }
 
 // describe renders the installed GPUs for a log line explaining a miss.

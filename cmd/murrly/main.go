@@ -120,7 +120,7 @@ func main() {
 	// fastest-first by default, so leaving the choice to it puts Whisper on
 	// the quickest card rather than the one we want; PreferDevice pins the
 	// configured card by UUID, and steps aside when it isn't installed.
-	gpucheck.PreferDevice(cfg.Whisper.PreferredGPU)
+	gpucheck.PreferDevice(cfg.Whisper.PreferredGPU, cfg.Whisper.ModelPath)
 
 	trCfg := transcriber.Config{
 		ModelPath:     cfg.Whisper.ModelPath,

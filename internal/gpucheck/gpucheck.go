@@ -20,6 +20,7 @@ package gpucheck
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -33,18 +34,26 @@ const (
 	bytesPerMiB = 1024 * 1024
 	// uuidPrefix is how CUDA and nvidia-smi both spell a device UUID.
 	uuidPrefix = "GPU-"
+	// WeakestName is the preferred_gpu value that means "whichever card is
+	// the smallest", instead of naming a model. It exists because naming a
+	// card ties the config to hardware that can be pulled out of the machine:
+	// once the named card is gone the preference silently stops applying and
+	// CUDA puts Whisper back on the fastest card — the exact outcome the
+	// setting was there to avoid.
+	WeakestName = "weakest"
 )
 
 // Device is one GPU as nvidia-smi reports it.
 type Device struct {
-	UUID    string
-	Name    string
-	FreeMiB int64
+	UUID     string
+	Name     string
+	FreeMiB  int64
+	TotalMiB int64
 }
 
 // ParseDevices reads the output of
 //
-//	nvidia-smi --query-gpu=uuid,name,memory.free --format=csv,noheader,nounits
+//	nvidia-smi --query-gpu=uuid,name,memory.free,memory.total --format=csv,noheader,nounits
 //
 // one device per line. Malformed lines are an error rather than a silent
 // skip: a half-read device list would make the caller reason about the wrong
@@ -57,17 +66,22 @@ func ParseDevices(out string) ([]Device, error) {
 			continue
 		}
 		parts := strings.Split(line, ",")
-		if len(parts) != 3 {
+		if len(parts) != 4 {
 			return nil, fmt.Errorf("unexpected nvidia-smi line %q", line)
 		}
 		free, err := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("parse free memory in %q: %w", line, err)
 		}
+		total, err := strconv.ParseInt(strings.TrimSpace(parts[3]), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse total memory in %q: %w", line, err)
+		}
 		devs = append(devs, Device{
-			UUID:    strings.TrimSpace(parts[0]),
-			Name:    strings.TrimSpace(parts[1]),
-			FreeMiB: free,
+			UUID:     strings.TrimSpace(parts[0]),
+			Name:     strings.TrimSpace(parts[1]),
+			FreeMiB:  free,
+			TotalMiB: total,
 		})
 	}
 	if len(devs) == 0 {
@@ -91,6 +105,56 @@ func SelectByName(devs []Device, want string) (Device, bool) {
 		}
 	}
 	return Device{}, false
+}
+
+// IsWeakest reports whether a preferred_gpu value asks for the smallest card
+// rather than naming one.
+func IsWeakest(want string) bool {
+	return strings.EqualFold(strings.TrimSpace(want), WeakestName)
+}
+
+// SelectWeakest picks the smallest card that can still hold modelBytes of
+// weights, and explains the choice for the log.
+//
+// "Smallest" is total VRAM, not free VRAM: free memory swings with whatever
+// else is on the screen right now, and a preference that flips between cards
+// on every start is worse than no preference at all. Total capacity is what
+// the user is actually expressing when they say "leave the big card alone".
+//
+// The fit ladder matters because the point of this setting is to keep the big
+// card free, not to refuse to start: we take the smallest card with room to
+// spare, else the smallest the weights merely fit on, else the card with the
+// most free memory. That last rung can land on the big card — by then the
+// alternative is EnsureFree aborting the startup, and a running Murrly on the
+// wrong card beats no Murrly at all. A modelBytes of 0 (size unknown) means
+// every card "fits" and the smallest one wins outright.
+func SelectWeakest(devs []Device, modelBytes int64) (Device, string, bool) {
+	if len(devs) == 0 {
+		return Device{}, "", false
+	}
+
+	bySize := make([]Device, len(devs))
+	copy(bySize, devs)
+	sort.SliceStable(bySize, func(i, j int) bool { return bySize[i].TotalMiB < bySize[j].TotalMiB })
+
+	for _, d := range bySize {
+		if Decide(d.FreeMiB, modelBytes) == VerdictOK {
+			return d, "smallest card with room to spare", true
+		}
+	}
+	for _, d := range bySize {
+		if Decide(d.FreeMiB, modelBytes) == VerdictTight {
+			return d, "smallest card the weights fit on, with a thin margin", true
+		}
+	}
+
+	roomiest := devs[0]
+	for _, d := range devs[1:] {
+		if d.FreeMiB > roomiest.FreeMiB {
+			roomiest = d
+		}
+	}
+	return roomiest, "no card has room for the weights — falling back to the one with the most free memory", true
 }
 
 // FindByUUID returns the device with the given UUID.
