@@ -748,6 +748,10 @@ func main() {
 	// in-flight transcription and free the GPU buffers before we exit.
 	hk.Stop()
 	releaseModel()
+	// Hand the X selection back. An xclip we started outlives us — X11
+	// selections are served by the owning process — so exiting without this
+	// leaves an orphan owning the desktop's clipboard.
+	cb.Release()
 }
 
 // scoringModeOrder fixes the menu row order; scoringModeLabels are the

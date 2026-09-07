@@ -59,3 +59,7 @@ func (c *Clipboard) Restore(s Saved) error {
 	C.mur_clip_restore_state(unsafe.Pointer(s.platformState))
 	return nil
 }
+
+// Release is a no-op on macOS: NSPasteboard is a server-side store, so
+// nothing of ours keeps owning it after a write.
+func (c *Clipboard) Release() {}

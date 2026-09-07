@@ -109,22 +109,12 @@ func (c *Clipboard) Save() (Saved, error) {
 		}
 	}
 
-	if c.RestorePrimary {
-		// X11 primary selection is almost always plain text
-		// (highlight-to-copy); skip the binary detour.
-		ptargets, err := readTargets("primary")
-		if err != nil {
-			return s, fmt.Errorf("read primary targets: %w", err)
-		}
-		if len(ptargets) > 0 {
-			out, err := xclipOutput("-selection", "primary", "-o")
-			if err == nil {
-				s.Primary = string(out)
-				s.HasPrimary = true
-			}
-			// On error: leave HasPrimary false; Restore will skip primary.
-		}
-	}
+	// PRIMARY is deliberately not touched. Insertion only ever writes
+	// CLIPBOARD, so there was never anything of ours in PRIMARY to put back
+	// — saving and re-publishing it only took the mouse-selection away from
+	// whatever application owned it, once per dictation, and left our own
+	// xclip owning it afterwards. RestorePrimary is kept on the struct so
+	// existing configs still parse; it no longer does anything.
 	return s, nil
 }
 
@@ -243,6 +233,7 @@ func writeSelectionTracked(sel, text string) (*xclipOwner, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
+	trackOwner(sel, cmd)
 	owner := &xclipOwner{}
 	go func() {
 		sc := bufio.NewScanner(stderr)
@@ -320,11 +311,8 @@ func (c *Clipboard) Restore(s Saved) error {
 			break
 		}
 	}
-	if c.RestorePrimary && s.HasPrimary {
-		if err := writeSelection("primary", s.Primary); err != nil {
-			return fmt.Errorf("restore primary: %w", err)
-		}
-	}
+	// No PRIMARY write here either — see Save. Publishing it left an xclip
+	// of ours owning the mouse selection for the rest of the session.
 	return nil
 }
 
@@ -356,6 +344,28 @@ func pickBinaryTarget(targets []string) string {
 			if t == p {
 				return t
 			}
+		}
+	}
+	// Any text target at all means this is a text clipboard: take the text
+	// path and let xclip negotiate the atom.
+	//
+	// Returning "the first non-text target" without this check is what froze
+	// the desktop. A Chromium copy advertises UTF8_STRING, STRING and
+	// text/plain — and, at the end of the list, its private
+	// chromium/x-internal-source-rfh-token. That atom is not text, so it won
+	// the loop below; Save stored those bytes and Restore re-published the
+	// user's clipboard as that atom ALONE. The selection then offered no text
+	// target whatsoever, so every application asking for text got nothing —
+	// and the tray menu, which queries the clipboard while holding a pointer
+	// and keyboard grab, blocked there with the grab still held, taking the
+	// whole desktop's input down with it.
+	//
+	// It also fed itself: the next Save saw the degraded list, picked the
+	// private atom again, and re-published it. The clipboard never recovered
+	// on its own.
+	for _, t := range targets {
+		if isTextTarget(t) {
+			return ""
 		}
 	}
 	for _, t := range targets {
@@ -392,8 +402,47 @@ func writeSelection(sel, text string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	trackOwner(sel, cmd)
 	go cmd.Wait()
 	return nil
+}
+
+// Selection owners outlive the call that started them — that is the point,
+// an X11 selection is served by its owning process for as long as it holds
+// it. They must not outlive US, though: an xclip orphaned by our exit goes
+// on owning the desktop's clipboard, and every paste anyone makes is then
+// served by a process whose application is gone. Track the current owner per
+// selection so Release can hand it back at shutdown. Only the latest matters
+// — starting a new owner makes the X server take the selection off the old
+// one, which then exits on its own.
+var (
+	ownersMu sync.Mutex
+	owners   = map[string]*exec.Cmd{}
+)
+
+func trackOwner(sel string, cmd *exec.Cmd) {
+	ownersMu.Lock()
+	owners[sel] = cmd
+	ownersMu.Unlock()
+}
+
+// Release gives up every selection we own. Call it on the way out.
+func (c *Clipboard) Release() {
+	ownersMu.Lock()
+	held := owners
+	owners = map[string]*exec.Cmd{}
+	ownersMu.Unlock()
+	for sel, cmd := range held {
+		if cmd.Process == nil {
+			continue
+		}
+		// Kill unconditionally rather than checking ProcessState, which the
+		// Wait goroutine writes concurrently. Killing an already-exited
+		// process just errors, and that is fine.
+		if err := cmd.Process.Kill(); err == nil {
+			log.Printf("clipboard: released the %s selection on shutdown", sel)
+		}
+	}
 }
 
 // writeSelectionBinary mirrors writeSelection for arbitrary MIME types —
@@ -406,6 +455,7 @@ func writeSelectionBinary(sel, target string, data []byte) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	trackOwner(sel, cmd)
 	go cmd.Wait()
 	return nil
 }

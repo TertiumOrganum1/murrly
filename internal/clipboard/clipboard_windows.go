@@ -177,3 +177,7 @@ func (c *Clipboard) Restore(s Saved) error {
 		return writeFormat(cfUnicodeText, unsafe.Slice((*byte)(unsafe.Pointer(&u16[0])), len(u16)*2))
 	}
 }
+
+// Release is a no-op on Windows: the clipboard is a system-owned store and
+// our writes do not leave a process serving it.
+func (c *Clipboard) Release() {}
