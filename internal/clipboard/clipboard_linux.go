@@ -370,7 +370,15 @@ func isTextTarget(t string) bool {
 	if strings.HasPrefix(t, "text/") {
 		return true
 	}
-	return t == "STRING" || t == "UTF8_STRING" || t == "COMPOUND_TEXT"
+	// TEXT belongs here too. Leaving it out was a real bug: an ordinary
+	// text clipboard advertising TEXT fell through to the "first non-text
+	// target" branch below, so Save stored it as binary with Target=TEXT
+	// and Restore re-published it as `xclip -t TEXT -i`. The selection then
+	// advertised only TARGETS and TEXT — GTK decodes a bare TEXT as
+	// COMPOUND_TEXT, which is where the Cyrillic mojibake came from. And it
+	// fed itself: the next Save saw the degraded target list and picked
+	// TEXT again.
+	return t == "STRING" || t == "UTF8_STRING" || t == "COMPOUND_TEXT" || t == "TEXT"
 }
 
 // writeSelection writes `text` into the X selection and detaches xclip into
