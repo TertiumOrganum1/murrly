@@ -65,6 +65,25 @@ func (p *Paster) PasteReady(beforeKey func(), ready func()) error {
 	return err
 }
 
+// ReleaseModifiers forces every modifier up before a synthetic chord.
+//
+// It exists for the paste-last binding: that one fires on the key PRESS of
+// Shift+F12, so the user's Shift is still physically down a moment later when
+// the Ctrl+V goes out — and the target sees Ctrl+Shift+V, which is a
+// different command in plenty of applications (markdown preview in VS Code,
+// paste-without-formatting elsewhere). --clearmodifiers on the Ctrl keydown
+// is not enough: it restores the modifiers afterwards, i.e. before the V.
+// The dictation paths don't need this — seconds of transcription pass between
+// their key press and the chord.
+//
+// Releasing a key the user is still holding is harmless: X sends another
+// KeyRelease when they let go, and nothing tracks the physical state.
+func (p *Paster) ReleaseModifiers() {
+	_ = exec.Command("xdotool", "keyup",
+		"Control_L", "Control_R", "Shift_L", "Shift_R",
+		"Alt_L", "Alt_R", "Super_L", "Super_R").Run()
+}
+
 func capsLockOn() bool {
 	out, err := exec.Command("xset", "q").Output()
 	if err != nil {

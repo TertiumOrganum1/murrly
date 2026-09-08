@@ -467,12 +467,55 @@ func main() {
 		return on
 	}
 
+	// pasteLast backs Shift+F12: put the phrase recognised last on the
+	// clipboard and paste it at the caret.
+	//
+	// It deliberately skips everything the ordinary insert routes do. No
+	// Save, so a hung selection owner cannot stall it before it starts. No
+	// Restore, so the phrase simply stays in the clipboard — the user asked
+	// for it there, and nothing has to be timed against a paste we cannot
+	// observe. Set publishes it as the SOLE clipboard content on every
+	// platform, which also clears out whatever image, PDF or private format
+	// was sitting there; a clipboard left in that state is what hangs
+	// applications mid-paste, so this key doubles as the way out of one.
+	//
+	// The phrase is the same one the top tray item copies — history index 0,
+	// which the picker also updates, so "last recognised" means the variant
+	// the user last chose when they chose one.
+	pastePaster := paster.New()
+	pasteLast := func() {
+		text, ok := history.Get(0)
+		if !ok {
+			log.Printf("paste-last: nothing recognised yet")
+			return
+		}
+		// History keeps the uncensored original; censor on the way out when
+		// the filter is on, exactly as the menu and the insert paths do.
+		text = ruprofane.Filter(text)
+		if text == "" {
+			return
+		}
+		if err := cb.Set(text); err != nil {
+			log.Printf("paste-last: clipboard.Set: %v", err)
+			return
+		}
+		// ReleaseModifiers as the beforeKey hook: this fires on the PRESS of
+		// Shift+F12, so without it the user's Shift is still down when the
+		// chord goes out and the target gets Ctrl+Shift+V.
+		if err := pastePaster.Paste(pastePaster.ReleaseModifiers); err != nil {
+			log.Printf("paste-last: %v", err)
+			return
+		}
+		log.Printf("paste-last: pasted %d chars; they stay in the clipboard", len([]rune(text)))
+	}
+
 	appCfg := app.Config{
 		Recorder:    recorder.New(),
 		Transcriber: loader,
 		Clipboard:   clipAdapter{cb},
 		Paster:      paster.New(),
 		Inserter:    insertRoutes,
+		PasteLast:   pasteLast,
 		PasteDelay:  pasteDelay,
 		PadSilence:  cfg.Whisper.PadSilence,
 		Notify:      desktopNotify,
@@ -513,14 +556,7 @@ func main() {
 		appCfg.MultiInference = cfg.Whisper.MultiInference
 	}
 
-	// Second engine: Nemotron on the Break key. Linux-only (the stub returns
-	// nil elsewhere). F12 stays on the fast Whisper path above; Break runs
-	// Nemotron, and F12 also fires Nemotron in the background to fill the
-	// Ctrl+F11 picker without delaying the Whisper insert.
-	if nemo := setupNemotron(events, cfg.Nemotron); nemo != nil {
-		appCfg.Nemotron = nemo
-	}
-	if multiRunner != nil || appCfg.Nemotron != nil {
+	if multiRunner != nil {
 		appCfg.Picker = pickerAdapter{}
 		// Menu twin of the Ctrl+F11 hotkey. actions is already handed to
 		// tray.New, but the items render at t.Run() — late assignment is
@@ -541,7 +577,7 @@ func main() {
 		appCfg.AdjustText = adjustTextForContext
 		uictxActive = true
 	}
-	// Shift+F12 forces the mid-sentence transform on every platform and
+	// Ctrl+Shift+F12 forces the mid-sentence transform on every platform and
 	// regardless of the context_insert auto-mode — it reads no field, so it
 	// always works (decapitalise, leading space, strip terminator).
 	appCfg.AdjustTextForced = adjustTextForcedMid
@@ -564,35 +600,6 @@ func main() {
 	// eXpress relaunch-with-accessibility (Linux): tray item + startup fix-up.
 	// No-op off Linux or when eXpress isn't installed.
 	wireExpressSetup(actions)
-	// Tray's Nemotron group (status line + restart). No-op off Linux or when
-	// the engine is disabled.
-	wireNemotronStatus(actions, appCfg.Nemotron)
-
-	// Nemotron enable/disable toggle (Linux). Off by default; turning it on
-	// starts+enables the sidecar service and persists the flag, but the
-	// engine/hotkeys wire at startup, so it takes full effect on the next
-	// Murrly launch (the notification says so). Turning it off stops the
-	// sidecar immediately, freeing its GPU model.
-	if runtime.GOOS == "linux" {
-		actions.IsNemotronOn = func() bool { return cfg.Nemotron.Enabled }
-		actions.OnToggleNemotron = func() bool {
-			newState := !cfg.Nemotron.Enabled
-			if err := setNemotronService(newState); err != nil {
-				log.Printf("nemotron service: %v", err)
-			}
-			if err := persistNemotronEnabled(cfgPath, cfg, newState); err != nil {
-				log.Printf("nemotron persist: %v", err)
-			}
-			cfg.Nemotron.Enabled = newState
-			if newState {
-				desktopNotify("Murrly: Nemotron", "Включён. Заработает после перезапуска Murrly.")
-			} else {
-				desktopNotify("Murrly: Nemotron", "Выключен, модель выгружена из GPU.")
-			}
-			return newState
-		}
-	}
-
 	a = app.New(appCfg)
 
 	hk, err := hotkey.New(cfg.Hotkey.Key)
@@ -616,11 +623,35 @@ func main() {
 		}
 	}()
 
-	// Shift+<hotkey> (Shift+F12) — push-to-talk that FORCES the mid-sentence
-	// insert transform (decapitalise, leading space, strip terminator), no
-	// field reading. Separate grab, like the Ctrl variants below; non-fatal
-	// registration.
-	if forceMidHk, err := hotkey.NewWithShift(cfg.Hotkey.Key); err != nil {
+	// Shift+<hotkey> (Shift+F12) — paste the phrase recognised last: it goes
+	// into the clipboard and out through the paste chord, and it STAYS in
+	// the clipboard afterwards. Fires on the press, not the release; there
+	// is no recording to bound, so waiting for the key to come up would only
+	// add latency to the one route that exists to be dependable under load.
+	// Separate grab, like the Ctrl variants below; non-fatal registration.
+	if pasteLastHk, err := hotkey.NewWithShift(cfg.Hotkey.Key); err != nil {
+		log.Printf("paste-last hotkey: %v", err)
+	} else {
+		go pasteLastHk.Start()
+		go func() {
+			for e := range pasteLastHk.Events() {
+				if e != hotkey.EventDown {
+					continue
+				}
+				select {
+				case events <- app.EventPasteLast:
+				default:
+					log.Printf("paste-last: event channel full, hotkey press ignored")
+				}
+			}
+		}()
+	}
+
+	// Ctrl+Shift+<hotkey> (Ctrl+Shift+F12) — push-to-talk that FORCES the
+	// mid-sentence insert transform (decapitalise, leading space, strip
+	// terminator), no field reading. It used to live on Shift+<hotkey>, which
+	// now pastes the last phrase.
+	if forceMidHk, err := hotkey.NewWithCtrlShift(cfg.Hotkey.Key); err != nil {
 		log.Printf("force-mid hotkey: %v", err)
 	} else {
 		go forceMidHk.Start()
@@ -966,34 +997,28 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 	// the focus — the post-pick insert must adapt to the target field,
 	// not to the picker's own UI. No-op when context-insert is off.
 	stashUIContext()
-	// Cap the window at the 8 most-recent variants: with two engines and
-	// reprocess rounds the cache can grow past what fits on screen and stays
-	// scannable. The returned index is mapped back to the full slice.
+	// Cap the window at the 8 most-recent variants: reprocess rounds grow the
+	// cache past what fits on screen and stays scannable. The returned index
+	// is mapped back to the full slice.
 	start := 0
 	if len(variants) > 8 {
 		start = len(variants) - 8
 	}
 	shown := variants[start:]
-	// Display order: all Whisper first, then all Nemotron; each group sorted
-	// by its own score (descending). `order` maps display position → index
-	// into `shown`, so the clicked card maps back to the right variant.
+	// Display order: highest score first. `order` maps display position →
+	// index into `shown`, so the clicked card maps back to the right variant.
 	order := make([]int, len(shown))
 	for i := range order {
 		order[i] = i
 	}
 	sort.SliceStable(order, func(a, b int) bool {
-		va, vb := shown[order[a]], shown[order[b]]
-		if ga, gb := groupRank(va.Model), groupRank(vb.Model); ga != gb {
-			return ga < gb
-		}
-		return va.Score > vb.Score
+		return shown[order[a]].Score > shown[order[b]].Score
 	})
-	// ★ marks the best variant in EACH engine group by the SAME principle the
-	// menu selected (v.Score = that principle: confidence / our cross score /
-	// blend) — so ★ lands on whatever the chosen metric ranks first, and the
-	// inserted ✓ (also the top by that metric) coincides with its group's ★.
-	bestW := bestByScoreInGroup(shown, false)
-	bestN := bestByScoreInGroup(shown, true)
+	// ★ marks the best variant by the SAME principle the menu selected
+	// (v.Score = that principle: confidence / our cross score / blend), so ★
+	// lands on whatever the chosen metric ranks first and coincides with the
+	// inserted ✓.
+	best := bestByScore(shown)
 	opts := make([]string, len(order))
 	for d, si := range order {
 		v := shown[si]
@@ -1001,27 +1026,16 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 		if v.Inserted {
 			marks += "✓" // what was actually inserted
 		}
-		if si == bestW || si == bestN {
-			marks += "★" // best by the chosen metric in this engine's group
+		if si == best {
+			marks += "★" // best by the chosen metric
 		}
-		// "<internal>/<our>": internal = model-native confidence, our = the
-		// 7-criteria cross score. Whisper exposes a real mean-token
-		// probability ∈[0,1]; Nemotron's RNNT path exposes none, so we show
-		// "—" rather than a fake number.
-		internal := "—"
-		if v.Model != app.ModelNemotron {
-			internal = fmt.Sprintf("%.2f", v.Confidence)
-		}
-		// Left gutter (fixed-width in the picker): line 1 = marks + engine
-		// glyph, line 2 = the two scores. The reply text is sent after a \x1f
-		// separator so the picker can align every card's text to one x.
-		// Score on the ORIGINAL text; censor only what is shown (toggle-gated).
-		glyph := strings.TrimSpace(modelGlyph(v.Model))
-		top := glyph
-		if marks != "" {
-			top = marks + " " + glyph
-		}
-		gutter := fmt.Sprintf("%s\n%s/%.2f", top, internal, crossjudge.Score(v.Text, ""))
+		// Left gutter (fixed-width in the picker): line 1 = marks, line 2 =
+		// "<internal>/<our>" — internal is the model-native mean token
+		// probability ∈[0,1], our is the 7-criteria cross score. The reply
+		// text is sent after a \x1f separator so the picker can align every
+		// card's text to one x. Score on the ORIGINAL text; censor only what
+		// is shown (toggle-gated).
+		gutter := fmt.Sprintf("%s\n%.2f/%.2f", marks, v.Confidence, crossjudge.Score(v.Text, ""))
 		opts[d] = gutter + "\x1f" + variantPreview(ruprofane.Filter(v.Text))
 	}
 	d, ok := picker.Pick("", opts)
@@ -1032,46 +1046,19 @@ func (pickerAdapter) Pick(variants []app.Variant) (int, bool) {
 	return start + order[d], true
 }
 
-// groupRank orders the picker groups: Whisper (and unknown) first, Nemotron
-// after.
-func groupRank(model string) int {
-	if model == app.ModelNemotron {
-		return 1
-	}
-	return 0
-}
-
-// bestByScoreInGroup returns the index into shown of the highest-v.Score
-// variant within one engine group (nemotron=true → Nemotron, false → Whisper
-// and any untagged). -1 if the group is empty. v.Score is whatever the active
-// menu principle produced (confidence / our cross score / blend), so ★ follows
-// the user's choice and coincides with the inserted ✓ for that engine.
-func bestByScoreInGroup(shown []app.Variant, nemotron bool) int {
+// bestByScore returns the index into shown of the highest-v.Score variant, or
+// -1 when shown is empty. v.Score is whatever the active menu principle
+// produced (confidence / our cross score / blend), so ★ follows the user's
+// choice and coincides with the inserted ✓.
+func bestByScore(shown []app.Variant) int {
 	best := -1
 	var bestScore float64
 	for i := range shown {
-		if (shown[i].Model == app.ModelNemotron) != nemotron {
-			continue
-		}
 		if best < 0 || shown[i].Score > bestScore {
 			best, bestScore = i, shown[i].Score
 		}
 	}
 	return best
-}
-
-// modelGlyph prefixes a per-engine marker so the picker shows which model
-// produced each variant. A glyph (not colour — colour marks hover/selection)
-// per the cross-engine design.
-func modelGlyph(model string) string {
-	switch model {
-	case app.ModelWhisper:
-		return "Ⓦ "
-	case app.ModelNemotron:
-		return "Ⓝ "
-	default:
-		return ""
-	}
 }
 
 // bestVariant returns the index of the highest-scoring variant (the one

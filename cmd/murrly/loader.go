@@ -217,16 +217,3 @@ func persistProfanityRemove(cfgPath string, cfg config.Config, on bool) error {
 	defer f.Close()
 	return toml.NewEncoder(f).Encode(cfg)
 }
-
-// persistNemotronEnabled writes the Nemotron on/off toggle to config.toml
-// so the menu choice survives a restart. Same whole-struct re-encode as the
-// other persist helpers.
-func persistNemotronEnabled(cfgPath string, cfg config.Config, on bool) error {
-	cfg.Nemotron.Enabled = on
-	f, err := os.Create(cfgPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return toml.NewEncoder(f).Encode(cfg)
-}

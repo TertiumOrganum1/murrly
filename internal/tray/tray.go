@@ -3,7 +3,6 @@ package tray
 
 import (
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"fyne.io/systray"
@@ -27,7 +26,6 @@ type Tray struct {
 	transcriptCh    chan []string
 	activeModelCh   chan int
 	activeScoringCh chan int
-	nemoStatusCh    chan string
 	actions         *menuactions.Actions
 }
 
@@ -38,17 +36,7 @@ func New(icons map[State][]byte, actions *menuactions.Actions) *Tray {
 		transcriptCh:    make(chan []string, 8),
 		activeModelCh:   make(chan int, 8),
 		activeScoringCh: make(chan int, 8),
-		nemoStatusCh:    make(chan string, 8),
 		actions:         actions,
-	}
-}
-
-// SetNemotronStatus updates the disabled "Nemotron: …" status line. No-op
-// if the Nemotron menu group isn't shown (callback nil).
-func (t *Tray) SetNemotronStatus(s string) {
-	select {
-	case t.nemoStatusCh <- s:
-	default:
 	}
 }
 
@@ -134,7 +122,7 @@ func (t *Tray) onReady() {
 	// the engines with a small silence prefix. Cheap manual retry when
 	// the first decode dropped punctuation or otherwise looks bad.
 	// The hotkey lives in the title — the menu doubles as the help.
-	reprocessItem := systray.AddMenuItem("Распознать ещё раз (Ctrl+F12)", "Прогнать последнюю запись через движки ещё раз (со сдвигом окна); Ctrl+Break — вставить вариант Nemotron")
+	reprocessItem := systray.AddMenuItem("Распознать ещё раз (Ctrl+F12)", "Прогнать последнюю запись через движок ещё раз (со сдвигом окна)")
 
 	// Menu twin of the Ctrl+F11 picker hotkey, doubling as its help.
 	// Hidden when no picker is wired (single-pass mode).
@@ -203,15 +191,6 @@ func (t *Tray) onReady() {
 		profanityRemoveItem.Disable()
 	}
 
-	// Nemotron enable/disable (Linux). Off by default — loads a multi-GB GPU
-	// model — so this is a checkbox the user opts into; turning it on starts
-	// the sidecar but the engine wires only on the next Murrly start.
-	var nemoToggleItem *systray.MenuItem
-	if t.actions.OnToggleNemotron != nil {
-		nemoOn := t.actions.IsNemotronOn != nil && t.actions.IsNemotronOn()
-		nemoToggleItem = systray.AddMenuItemCheckbox("Движок Nemotron (Break)", "Второй ASR-движок на клавише Break; грузит модель в GPU. Вступает в силу после перезапуска Murrly", nemoOn)
-	}
-
 	// Context-insert prerequisites (Linux): one self-describing item.
 	// Not yet set up → an actionable "включить…" button; everything in
 	// place → a disabled "настроена ✓" status line. Clicking applies
@@ -232,17 +211,6 @@ func (t *Tray) onReady() {
 	var expressItem *systray.MenuItem
 	if t.actions.OnRestartExpress != nil {
 		expressItem = systray.AddMenuItem("Перезапустить eXpress (доступность)", "Перезапустить eXpress с флагом доступности, чтобы вставка читала его поле")
-	}
-
-	// Nemotron group (Linux only — shown when the restart callback is wired).
-	// A disabled status line shows the ~48 s model load; a restart item
-	// recovers a wedged sidecar.
-	var nemoStatusItem, nemoRestartItem *systray.MenuItem
-	if t.actions.OnRestartNemotron != nil {
-		systray.AddSeparator()
-		nemoStatusItem = systray.AddMenuItem("Nemotron: загружается…", "Состояние сайдкара Nemotron")
-		nemoStatusItem.Disable()
-		nemoRestartItem = systray.AddMenuItem("Перезапустить Nemotron", "Перезапустить сайдкар-сервис Nemotron")
 	}
 
 	reloadItem := systray.AddMenuItem("Перезагрузить конфиг", "Перечитать config.toml")
@@ -353,22 +321,6 @@ func (t *Tray) onReady() {
 			}
 		}()
 	}
-	// Nemotron enable/disable toggle — flips state + (dis)starts the sidecar
-	// via the callback, re-ticking from the returned value.
-	if nemoToggleItem != nil {
-		mi := nemoToggleItem
-		go func() {
-			for range mi.ClickedCh {
-				if t.actions.OnToggleNemotron != nil {
-					if t.actions.OnToggleNemotron() {
-						mi.Check()
-					} else {
-						mi.Uncheck()
-					}
-				}
-			}
-		}()
-	}
 	if micPermItem != nil {
 		mi := micPermItem
 		go func() {
@@ -386,28 +338,6 @@ func (t *Tray) onReady() {
 				if t.actions.OnOpenAccessibility != nil {
 					t.actions.OnOpenAccessibility()
 				}
-			}
-		}()
-	}
-
-	// Nemotron restart click + status poller (conditional items run outside
-	// the main select, like the multi-inference toggle above).
-	if nemoRestartItem != nil {
-		mi := nemoRestartItem
-		go func() {
-			for range mi.ClickedCh {
-				if t.actions.OnRestartNemotron != nil {
-					t.actions.OnRestartNemotron()
-					t.SetNemotronStatus("перезапуск…")
-				}
-			}
-		}()
-	}
-	if nemoStatusItem != nil && t.actions.NemotronStatus != nil {
-		go func() {
-			for {
-				t.SetNemotronStatus(t.actions.NemotronStatus())
-				time.Sleep(3 * time.Second)
 			}
 		}()
 	}
@@ -441,10 +371,6 @@ func (t *Tray) onReady() {
 					} else {
 						item.Uncheck()
 					}
-				}
-			case s := <-t.nemoStatusCh:
-				if nemoStatusItem != nil {
-					nemoStatusItem.SetTitle("Nemotron: " + s)
 				}
 			case <-reloadItem.ClickedCh:
 				if t.actions.OnReloadConfig != nil {

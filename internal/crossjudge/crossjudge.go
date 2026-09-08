@@ -1,8 +1,7 @@
-// Package crossjudge compares two transcription candidates from DIFFERENT
-// engines (best Whisper vs best Nemotron) on cheap, applied, cosmetic
-// signals — no neural net, no external dictionary. It only decides which of
-// the two reads as the cleaner decode, for the Ctrl+F11 "★" hint; insertion
-// is still chosen per hotkey, not here.
+// Package crossjudge scores a transcription candidate on cheap, applied,
+// cosmetic signals — no external dictionary. It only says which of two
+// candidates reads as the cleaner decode, which is what ranks the variants
+// behind Ctrl+F11.
 package crossjudge
 
 import (

@@ -68,7 +68,7 @@ var x11Keysyms = map[string]C.KeySym{
 	"f13": 0xFFCA,
 	"f14": 0xFFCB,
 	"f15": 0xFFCC,
-	// Pause/Break — отдельная клавиша для движка Nemotron (Linux-only).
+	// Pause/Break — свободные клавиши, ни на что не назначены по умолчанию.
 	"pause": 0xFF13, // XK_Pause
 	"break": 0xFF6B, // XK_Break
 	// space — used by the Microsoft Ergonomic keyboard's emoji key, which the
@@ -108,10 +108,17 @@ func NewWithCtrlAlt(key string) (*Listener, error) {
 }
 
 // NewWithShift creates a Listener bound to Shift+<key>. Used for the
-// "force mid-sentence insert" push-to-talk variant (Shift+F12) — a
-// separate grab from the bare key, like the Ctrl variants above.
+// "paste the last recognised phrase" binding (Shift+F12) — a separate grab
+// from the bare key, like the Ctrl variants above.
 func NewWithShift(key string) (*Listener, error) {
 	return newListener(key, C.ShiftMask)
+}
+
+// NewWithCtrlShift creates a Listener bound to Ctrl+Shift+<key>. Used for
+// the "force mid-sentence insert" push-to-talk variant, which moved off
+// Shift+<key> when that became the paste-last binding.
+func NewWithCtrlShift(key string) (*Listener, error) {
+	return newListener(key, C.ControlMask|C.ShiftMask)
 }
 
 // NewWithCtrlShiftSuper creates a Listener bound to Ctrl+Shift+Super+<key>.

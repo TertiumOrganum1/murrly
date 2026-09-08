@@ -118,6 +118,16 @@ func (c *Clipboard) Save() (Saved, error) {
 	return s, nil
 }
 
+// Set makes `text` the sole content of the clipboard. Sole is load-bearing,
+// not incidental: the fresh xclip becomes the only selection owner and
+// advertises text targets only, so an image, a PDF or an application's
+// private atom that the previous owner published is gone with it — there is
+// no such thing as a leftover "image slot" alongside our text. That matters
+// beyond tidiness: a selection left advertising a broken or private-only
+// target is what hangs applications mid-paste (see pickBinaryTarget for the
+// time we did that to ourselves), so publishing over it is also the cure.
+// Windows clears every format via EmptyClipboard and macOS via clearContents
+// for the same reason.
 func (c *Clipboard) Set(text string) error {
 	owner, err := writeSelectionTracked("clipboard", text)
 	if err != nil {

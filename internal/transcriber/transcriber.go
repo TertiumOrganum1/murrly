@@ -370,10 +370,9 @@ const (
 //     time concatenation against following text).
 //
 // FilterText runs the full Whisper post-processing pipeline over a single
-// text. Exposed so the cross-engine ranker can put a Nemotron candidate on
-// the same footing as Whisper output (repeat-collapse, filler-strip,
-// capitalisation, terminal punctuation) before comparing the two. It does
-// NOT change what Nemotron actually inserts — that stays lightly formatted.
+// text (repeat-collapse, filler-strip, capitalisation, terminal punctuation).
+// Exposed so a candidate that did not come through the segment path can be
+// put on the same footing before the two are compared.
 func FilterText(text string) string {
 	return formatSegments([]string{text})
 }

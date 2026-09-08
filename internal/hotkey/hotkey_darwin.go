@@ -67,9 +67,16 @@ func NewWithCtrlAlt(key string) (*Listener, error) {
 }
 
 // NewWithShift creates a Listener bound to Shift+<key> on macOS. Used for
-// the "force mid-sentence insert" push-to-talk variant (Shift+F12).
+// the "paste the last recognised phrase" binding (Shift+F12).
 func NewWithShift(key string) (*Listener, error) {
 	return newModified(key, gohotkey.ModShift)
+}
+
+// NewWithCtrlShift creates a Listener bound to Ctrl+Shift+<key> on macOS.
+// Used for the force mid-sentence push-to-talk variant, which moved off
+// Shift+<key> when that became the paste-last binding.
+func NewWithCtrlShift(key string) (*Listener, error) {
+	return newModified(key, gohotkey.ModCtrl|gohotkey.ModShift)
 }
 
 // NewWithCtrlShiftSuper exists for cross-platform compilation; the

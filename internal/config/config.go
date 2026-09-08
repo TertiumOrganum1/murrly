@@ -13,11 +13,10 @@ import (
 )
 
 type Config struct {
-	Hotkey   HotkeyConfig   `toml:"hotkey"`
-	Audio    AudioConfig    `toml:"audio"`
-	Whisper  WhisperConfig  `toml:"whisper"`
-	Nemotron NemotronConfig `toml:"nemotron"`
-	Output   OutputConfig   `toml:"output"`
+	Hotkey  HotkeyConfig  `toml:"hotkey"`
+	Audio   AudioConfig   `toml:"audio"`
+	Whisper WhisperConfig `toml:"whisper"`
+	Output  OutputConfig  `toml:"output"`
 }
 
 type HotkeyConfig struct {
@@ -168,23 +167,6 @@ func normalizeInsertMode(v string) string {
 	}
 }
 
-// NemotronConfig configures the second engine (Linux-only; the Break key).
-// The model runs in an external Python sidecar served over a Unix socket.
-type NemotronConfig struct {
-	// Enabled wires the Break key to Nemotron and the F12 background fill.
-	// Default FALSE: the sidecar loads a multi-GB model on the GPU and is
-	// off unless the user opts in via the tray ("Движок Nemotron"). Set
-	// true to wire the engine at startup. No effect on non-Linux builds.
-	Enabled bool `toml:"enabled"`
-	// SocketPath is the sidecar's Unix socket. Empty → /run/user/<uid>/murrly-nemotron.sock.
-	SocketPath string `toml:"socket_path"`
-	// Lang is the target language prompt (e.g. "ru-RU").
-	Lang string `toml:"lang"`
-	// BoostAlpha is the context-biasing weight (0 = off). >0.5 starts to
-	// mangle ordinary speech, so 0.5 is the tuned default.
-	BoostAlpha float64 `toml:"boost_alpha"`
-}
-
 func defaults() Config {
 	return Config{
 		Hotkey: HotkeyConfig{Key: "F12", Mode: "push_to_talk"},
@@ -209,10 +191,6 @@ func defaults() Config {
 			InitialPrompt:       "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
 			PreferredGPU:        "weakest", // gpucheck.WeakestName — leave the faster card free for other GPU work
 		},
-		// Nemotron: second engine on the Break key. OFF by default — it
-		// loads a multi-GB model on the GPU; opt in via the tray toggle,
-		// which starts the systemd user service and flips this flag.
-		Nemotron: NemotronConfig{Enabled: false, SocketPath: "", Lang: "ru-RU", BoostAlpha: 0.5},
 		// PasteDelayMs sits between Set-clipboard / Cmd-V and the Restore-clipboard
 		// step. Too short and the focused app reads the restored (old) clipboard
 		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip

@@ -27,7 +27,11 @@ const pasteConsumeDelay = 400 * time.Millisecond
 const (
 	inputKeyboard  = 1
 	keyeventfKeyUp = 0x0002
+	vkShift        = 0x10
 	vkControl      = 0x11
+	vkMenu         = 0x12 // Alt
+	vkLWin         = 0x5B
+	vkRWin         = 0x5C
 	vkV            = 0x56
 )
 
@@ -53,6 +57,25 @@ var (
 	user32      = windows.NewLazySystemDLL("user32.dll")
 	procSendInp = user32.NewProc("SendInput")
 )
+
+// ReleaseModifiers forces every modifier up before a synthetic chord. See the
+// Linux implementation for why: the paste-last binding fires on the key press
+// of Shift+F12, so without this the Ctrl+V that follows arrives as
+// Ctrl+Shift+V.
+func (p *Paster) ReleaseModifiers() {
+	events := []input{
+		{inputType: inputKeyboard, ki: keybdInput{wVk: vkShift, dwFlags: keyeventfKeyUp}},
+		{inputType: inputKeyboard, ki: keybdInput{wVk: vkControl, dwFlags: keyeventfKeyUp}},
+		{inputType: inputKeyboard, ki: keybdInput{wVk: vkMenu, dwFlags: keyeventfKeyUp}},
+		{inputType: inputKeyboard, ki: keybdInput{wVk: vkLWin, dwFlags: keyeventfKeyUp}},
+		{inputType: inputKeyboard, ki: keybdInput{wVk: vkRWin, dwFlags: keyeventfKeyUp}},
+	}
+	procSendInp.Call(
+		uintptr(len(events)),
+		uintptr(unsafe.Pointer(&events[0])),
+		unsafe.Sizeof(events[0]),
+	)
+}
 
 // Paste synthesises Ctrl+V to the focused window via SendInput. Ctrl is held
 // down explicitly around the V (down ctrl → down v → up v → up ctrl) so the

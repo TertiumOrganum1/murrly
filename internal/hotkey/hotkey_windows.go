@@ -101,13 +101,19 @@ func New(key string) (*Listener, error) { return newListener(key, false, false, 
 // keeps it from colliding with the bare push-to-talk listener.
 func NewWithCtrl(key string) (*Listener, error) { return newListener(key, true, false, false, false) }
 
-// NewWithCtrlAlt binds Ctrl+Alt+<key>. Unused on Windows (it backed the
-// Linux-only Nemotron picker) but kept for the cross-platform API.
+// NewWithCtrlAlt binds Ctrl+Alt+<key>. Unused on Windows, but kept for the
+// cross-platform API.
 func NewWithCtrlAlt(key string) (*Listener, error) { return newListener(key, true, true, false, false) }
 
-// NewWithShift binds Shift+<key> (force mid-phrase insert). Shift is an
-// exact-matched modifier here, so the bare listener won't also fire.
+// NewWithShift binds Shift+<key> (paste the last recognised phrase). Shift is
+// an exact-matched modifier here, so the bare listener won't also fire.
 func NewWithShift(key string) (*Listener, error) { return newListener(key, false, false, true, false) }
+
+// NewWithCtrlShift binds Ctrl+Shift+<key> (force mid-phrase insert), which
+// moved off Shift+<key> when that became the paste-last binding.
+func NewWithCtrlShift(key string) (*Listener, error) {
+	return newListener(key, true, false, true, false)
+}
 
 // NewWithCtrlShiftSuper binds the Microsoft Ergonomic keyboard's emoji key,
 // which the keyboard firmware sends as the chord Ctrl+Shift+Alt+Win+<key>

@@ -42,23 +42,27 @@ const (
 	// user-chosen variant replaces the inserted text. No-op when there
 	// are no cached variants or no picker is wired (non-Linux).
 	EventPickCandidate
-	// EventKeyDownNemotron / EventKeyUpNemotron mirror EventKeyDown/Up but
-	// route the recording through the Nemotron engine (the Break key,
-	// Linux-only). Whisper stays on EventKeyDown/Up (F12). No-op when no
-	// NemotronTranscriber is wired.
-	EventKeyDownNemotron
-	EventKeyUpNemotron
-	// EventReprocessNemotron is Ctrl+Break: re-run the last PCM through both
-	// engines and insert the best Nemotron variant (Ctrl+F12 → best Whisper).
-	EventReprocessNemotron
 	// EventKeyDownForceMid / EventKeyUpForceMid mirror EventKeyDown/Up but
-	// FORCE the mid-sentence insert transform (Shift+F12): the recognised
-	// text is decapitalised, gets a single leading space and its terminal
-	// punctuation stripped, with no field reading at all. For when the user
-	// knows they're slipping text into the middle of a phrase and doesn't
-	// want the context heuristics to guess.
+	// FORCE the mid-sentence insert transform (Ctrl+Shift+F12): the
+	// recognised text is decapitalised, gets a single leading space and its
+	// terminal punctuation stripped, with no field reading at all. For when
+	// the user knows they're slipping text into the middle of a phrase and
+	// doesn't want the context heuristics to guess.
 	EventKeyDownForceMid
 	EventKeyUpForceMid
+	// EventPasteLast (Shift+F12) delivers the phrase that was recognised
+	// last by the crudest route there is: overwrite the clipboard with it
+	// and press the paste chord. No transform, no field reading, no saving
+	// and restoring the user's clipboard — it is taken and kept.
+	//
+	// That bluntness is the feature. Every other route depends on something
+	// outside our control staying responsive: the accessibility bus, the
+	// target's event loop noticing a selection change in time, our own
+	// observation of when it read what we published. Under load those are
+	// exactly what stops being true, and the dictation lands nowhere. This
+	// one has nothing to observe and nothing to put back, so there is no
+	// timing to lose.
+	EventPasteLast
 )
 
 type Recorder interface {
@@ -79,22 +83,16 @@ type Variant struct {
 	Score      float64
 	Confidence float64
 	PadLeadSec float64
-	// Model tags which engine produced this variant ("whisper" / "nemotron").
-	// Empty on the legacy single-engine paths. Drives per-model best
-	// selection (F12 → Whisper, Break → Nemotron) and the picker glyph.
+	// Model tags which engine produced this variant. Empty on the legacy
+	// single-engine paths; drives the picker glyph.
 	Model string
 	// Inserted marks the variant that was actually auto-inserted for this
-	// dictation (the pressed engine's best). The picker stars THIS one,
-	// instead of a cross-model "highest score" that compares incomparable
-	// Whisper/Nemotron scales and lands on the wrong card.
+	// dictation. The picker stars THIS one.
 	Inserted bool
 }
 
 // Engine model tags carried on Variant.Model.
-const (
-	ModelWhisper  = "whisper"
-	ModelNemotron = "nemotron"
-)
+const ModelWhisper = "whisper"
 
 // MultiTranscriber runs several inference variants over one sample and
 // returns them ranked best-first. leadOffsetSec is added to every
@@ -103,17 +101,6 @@ const (
 // Config means single-pass mode (use Transcriber).
 type MultiTranscriber interface {
 	Run(pcm []float32, leadOffsetSec float64) []Variant
-	Count() int
-}
-
-// NemotronEngine produces Nemotron-only variants, ranked best-first. Driven
-// by the Break key. F12 stays on the Whisper Transcriber/MultiTranscriber
-// path so it keeps its original speed — we deliberately do NOT run both
-// engines on every dictation (Nemotron's per-call overhead made that ~10×
-// slower on short phrases). multi → full variant batch; false → single pass.
-// leadOffsetSec feeds reprocess-round diversification; Count is the batch size.
-type NemotronEngine interface {
-	Run(pcm []float32, leadOffsetSec float64, multi bool) []Variant
 	Count() int
 }
 
@@ -150,12 +137,8 @@ type Inserter interface {
 type Config struct {
 	Recorder    Recorder
 	Transcriber Transcriber
-	// Nemotron, when non-nil, is the second engine driven by the Break key.
-	// F12 keeps using Transcriber / MultiTranscriber (Whisper) at full speed;
-	// Break runs Nemotron only. nil → Break ignored (non-Linux / disabled).
-	Nemotron  NemotronEngine
-	Clipboard Clipboard
-	Paster    Paster
+	Clipboard   Clipboard
+	Paster      Paster
 	// Inserter, when set, is how recognized text reaches the field. Left
 	// nil it defaults to the clipboard route built from Clipboard/Paster
 	// above, which is what every caller did before insertion became
@@ -170,7 +153,14 @@ type Config struct {
 	// leading whitespace / terminator. Returning the input unchanged
 	// is a valid no-op (and the default when AdjustText is nil).
 	AdjustText func(string) string
-	// AdjustTextForced is the Shift+F12 variant of AdjustText: it applies
+	// PasteLast handles EventPasteLast: put the last recognised phrase on
+	// the clipboard and press the paste chord. It lives in the caller
+	// because the phrase comes from the tray's transcript history, which
+	// the App does not own. Run on the App goroutine like every other
+	// insert, so it cannot race a dictation for the clipboard. nil → the
+	// event is ignored.
+	PasteLast func()
+	// AdjustTextForced is the Ctrl+Shift+F12 variant of AdjustText: it applies
 	// the mid-sentence transform unconditionally (decapitalise, leading
 	// space, strip terminator) without reading the focused field. Called
 	// instead of AdjustText for recordings started by EventKeyDownForceMid.
@@ -242,25 +232,15 @@ type App struct {
 	// because the two run on different goroutines and the choice must take
 	// effect on the very next dictation, without a restart.
 	ins atomic.Value
-	// preferNemotron records which engine's best to INSERT for the current
-	// recording/reprocess: true when triggered by the Break family
-	// (EventKeyDownNemotron / EventReprocessNemotron), false for F12 /
-	// Ctrl+F12. Both keys still run BOTH engines via CrossEngine — this only
-	// picks which model's top variant lands in the window. Touched only on
-	// the App goroutine — no sync needed.
-	preferNemotron bool
 	// forceMid is true for the current recording/insert when it was started
-	// by Shift+F12 (EventKeyDownForceMid): insertText then uses
+	// by Ctrl+Shift+F12 (EventKeyDownForceMid): insertText then uses
 	// AdjustTextForced (unconditional mid-sentence transform) instead of the
 	// context-reading AdjustText. Set on the force keydown, cleared on every
 	// other keydown / reprocess / picker entry. App goroutine only.
 	forceMid bool
-	// varMu guards lastVariants and varGen. lastVariants is appended both
-	// from the App goroutine (the engine whose result is inserted) AND from a
-	// background Nemotron goroutine on the F12 path, so it needs a lock.
-	// varGen bumps on every fresh recording; a background append checks it so
-	// a slow Nemotron run from a previous utterance can't leak into the next
-	// one's picker set.
+	// varMu guards lastVariants and varGen. varGen bumps on every fresh
+	// recording, so a picker snapshot can tell one utterance's variant set
+	// from the next.
 	varMu  sync.Mutex
 	varGen uint64
 }
@@ -284,18 +264,6 @@ func (a *App) appendVariants(vs []Variant) int {
 	return base
 }
 
-// appendVariantsGen appends from a background goroutine, but only if the
-// generation still matches (i.e. no newer recording has started).
-func (a *App) appendVariantsGen(gen uint64, vs []Variant) bool {
-	a.varMu.Lock()
-	defer a.varMu.Unlock()
-	if gen != a.varGen {
-		return false
-	}
-	a.lastVariants = append(a.lastVariants, vs...)
-	return true
-}
-
 // markInserted flags lastVariants[idx] as the auto-inserted variant and
 // clears the flag on the rest, so the picker stars exactly what landed in
 // the window (not a cross-model "highest score").
@@ -307,63 +275,12 @@ func (a *App) markInserted(idx int) {
 	a.varMu.Unlock()
 }
 
-func (a *App) curGen() uint64 {
-	a.varMu.Lock()
-	defer a.varMu.Unlock()
-	return a.varGen
-}
-
 // snapshotVariants returns a copy for the picker to render without holding
 // the lock during the (blocking) UI call.
 func (a *App) snapshotVariants() []Variant {
 	a.varMu.Lock()
 	defer a.varMu.Unlock()
 	return append([]Variant(nil), a.lastVariants...)
-}
-
-// kickNemotronBackground runs Nemotron off the critical path (F12 inserts
-// Whisper immediately) and folds its variants into the picker cache when
-// done. Nemotron is a separate process, so this goroutine shares no mutable
-// Go state with the engine — only lastVariants, which is mutex-guarded.
-func (a *App) kickNemotronBackground(pcm []float32, leadOffsetSec float64) {
-	gen := a.curGen()
-	multi := a.multiOn.Load()
-	go func() {
-		vs := a.cfg.Nemotron.Run(pcm, leadOffsetSec, multi)
-		if len(vs) == 0 {
-			return
-		}
-		if a.appendVariantsGen(gen, vs) {
-			log.Printf("nemotron (background): +%d variants in picker", len(vs))
-		}
-	}()
-}
-
-// kickWhisperBackground mirrors kickNemotronBackground for the Break path:
-// Break inserts the Nemotron result immediately, and Whisper runs in the
-// BACKGROUND so its variants still surface in the Ctrl+F11 picker. Multi mode
-// → the full variant batch; single pass → one variant. Appended only if the
-// generation still matches (no newer recording/reprocess has started).
-func (a *App) kickWhisperBackground(pcm []float32, leadOffsetSec float64) {
-	gen := a.curGen()
-	multi := a.multiActive()
-	go func() {
-		var vs []Variant
-		switch {
-		case multi:
-			vs = a.cfg.MultiTranscriber.Run(pcm, leadOffsetSec)
-		case a.cfg.Transcriber != nil:
-			if text, err := a.cfg.Transcriber.Transcribe(pcm); err == nil && text != "" {
-				vs = []Variant{{Text: text, Model: ModelWhisper}}
-			}
-		}
-		if len(vs) == 0 {
-			return
-		}
-		if a.appendVariantsGen(gen, vs) {
-			log.Printf("whisper (background): +%d variants in picker", len(vs))
-		}
-	}()
 }
 
 const (
@@ -472,7 +389,6 @@ func (a *App) handle(ev Event) {
 	case StateIdle, StateError:
 		switch ev {
 		case EventKeyDown:
-			a.preferNemotron = false
 			a.forceMid = false
 			if err := a.cfg.Recorder.Start(); err != nil {
 				log.Printf("recorder.Start: %v", err)
@@ -481,9 +397,8 @@ func (a *App) handle(ev Event) {
 			}
 			a.setState(StateRecording)
 		case EventKeyDownForceMid:
-			// Shift+F12: same Whisper recording path as F12, but the insert
-			// is forced through the mid-sentence transform.
-			a.preferNemotron = false
+			// Ctrl+Shift+F12: same recording path as F12, but the insert is
+			// forced through the mid-sentence transform.
 			a.forceMid = true
 			if err := a.cfg.Recorder.Start(); err != nil {
 				log.Printf("recorder.Start: %v", err)
@@ -491,33 +406,20 @@ func (a *App) handle(ev Event) {
 				return
 			}
 			a.setState(StateRecording)
-		case EventKeyDownNemotron:
-			if a.cfg.Nemotron == nil {
-				log.Printf("nemotron: engine not wired, Break ignored")
-				return
-			}
-			if err := a.cfg.Recorder.Start(); err != nil {
-				log.Printf("recorder.Start: %v", err)
-				a.setState(StateError)
-				return
-			}
-			a.preferNemotron = true
-			a.forceMid = false
-			a.setState(StateRecording)
 		case EventReprocess:
-			a.preferNemotron = false
-			a.forceMid = false
-			a.reprocess()
-		case EventReprocessNemotron:
-			a.preferNemotron = true
 			a.forceMid = false
 			a.reprocess()
 		case EventPickCandidate:
 			a.forceMid = false
 			a.pickCandidate()
+		case EventPasteLast:
+			a.forceMid = false
+			if a.cfg.PasteLast != nil {
+				a.cfg.PasteLast()
+			}
 		}
 	case StateRecording:
-		if ev == EventKeyUp || ev == EventKeyUpNemotron || ev == EventKeyUpForceMid {
+		if ev == EventKeyUp || ev == EventKeyUpForceMid {
 			a.finish()
 		}
 		// EventReprocess while recording is intentionally ignored
@@ -529,10 +431,6 @@ func (a *App) handle(ev Event) {
 }
 
 func (a *App) finish() {
-	// Capture & clear the engine preference up front so it can't leak into
-	// the next recording even if we early-return below (e.g. empty PCM).
-	pref := a.preferNemotron
-	a.preferNemotron = false
 	// forceMid is read by insertText (called synchronously below); reset it on
 	// return so it never survives this recording. Without this, an emoji-key
 	// TAP (sets forceMid=true, then finishes empty with no insert) would leave
@@ -573,16 +471,6 @@ func (a *App) finish() {
 	a.multiRound = 0
 	a.resetVariants()
 
-	// Break inserts a Nemotron result (and waits for it). F12 inserts the
-	// Whisper result immediately and lets Nemotron run in the BACKGROUND —
-	// its variants surface in the Ctrl+F11 picker when ready, never blocking
-	// the fast Whisper insert.
-	if pref && a.cfg.Nemotron != nil {
-		a.runNemotron(pcm, 0, "recording")
-		a.kickWhisperBackground(pcm, 0) // mirror of F12: the other engine fills the picker in the background
-		return
-	}
-
 	if a.multiActive() {
 		a.runMulti(pcm, 0, "recording")
 	} else {
@@ -591,9 +479,6 @@ func (a *App) finish() {
 			toTranscribe = padPCM(pcm, baselineSilencePadStartSec, baselineSilencePadEndSec)
 		}
 		a.transcribeAndPaste(toTranscribe)
-	}
-	if a.cfg.Nemotron != nil {
-		a.kickNemotronBackground(pcm, 0)
 	}
 }
 
@@ -607,8 +492,6 @@ func (a *App) finish() {
 // click count. The counter resets the next time finish() captures
 // fresh audio.
 func (a *App) reprocess() {
-	pref := a.preferNemotron
-	a.preferNemotron = false
 	if len(a.lastPCM) == 0 {
 		log.Printf("reprocess: no saved audio to re-run")
 		return
@@ -620,23 +503,11 @@ func (a *App) reprocess() {
 	a.resetVariants()
 	a.multiRound++
 
-	// Ctrl+Break: insert the Nemotron best, run Whisper in the background.
-	if pref && a.cfg.Nemotron != nil {
-		offset := float64(a.multiRound*a.cfg.Nemotron.Count()) * multiReprocessStepSec
-		a.runNemotron(a.lastPCM, offset, fmt.Sprintf("reprocess #%d", a.multiRound))
-		a.kickWhisperBackground(a.lastPCM, offset)
-		return
-	}
-
-	// Ctrl+F12: insert the Whisper best, run Nemotron in the background. Both
-	// engines get the same advancing leading-silence offset so the new batch
-	// lands on fresh chunk alignments instead of repeating the previous one.
+	// Ctrl+F12: fresh batch with an advancing leading-silence offset, so it
+	// lands on new chunk alignments instead of repeating the previous one.
 	if a.multiActive() {
 		offset := float64(a.multiRound*a.cfg.MultiTranscriber.Count()) * multiReprocessStepSec
 		a.runMulti(a.lastPCM, offset, fmt.Sprintf("reprocess #%d", a.multiRound))
-		if a.cfg.Nemotron != nil {
-			a.kickNemotronBackground(a.lastPCM, offset)
-		}
 		return
 	}
 
@@ -652,9 +523,6 @@ func (a *App) reprocess() {
 	origSec := float64(len(a.lastPCM)) / float64(pcmSampleRateHz)
 	log.Printf("reprocess: attempt #%d, re-running last %.2fs of audio with %.1fs leading, %.1fs trailing silence", a.reprocessAttempts, origSec, startPad, endPad)
 	a.transcribeAndPaste(padded)
-	if a.cfg.Nemotron != nil {
-		a.kickNemotronBackground(a.lastPCM, startPad)
-	}
 }
 
 // silenceThreshold is the peak |sample| (portaudio float32 is in [-1,1])
@@ -695,17 +563,10 @@ func padPCM(pcm []float32, startSec, endSec float64) []float32 {
 // the F12 path does — reprocess shouldn't overwrite the saved
 // original with a padded version).
 func (a *App) transcribeAndPaste(pcm []float32) {
-	a.transcribeAndPasteWith(a.cfg.Transcriber, pcm)
-}
-
-// transcribeAndPasteWith runs the given transcriber over the PCM and
-// inserts the result. transcribeAndPaste uses the default (Whisper)
-// engine; the Break path passes NemotronTranscriber.
-func (a *App) transcribeAndPasteWith(tr Transcriber, pcm []float32) {
 	a.setState(StateTranscribing)
 	audioSec := float64(len(pcm)) / float64(pcmSampleRateHz)
 	t0 := time.Now()
-	text, err := tr.Transcribe(pcm)
+	text, err := a.cfg.Transcriber.Transcribe(pcm)
 	transcribeMs := time.Since(t0).Milliseconds()
 	if err != nil {
 		log.Printf("transcribe: %v", err)
@@ -754,39 +615,7 @@ func (a *App) runMulti(pcm []float32, leadOffsetSec float64, label string) {
 		a.setState(StateError)
 		return
 	}
-	a.markInserted(base) // star the Whisper best in the picker
-	a.setState(StateIdle)
-}
-
-// runNemotron drives the Break path: Nemotron-only variants (full batch when
-// multi is on, else a single pass), ranked best-first by the engine. Caches
-// them for the Ctrl+F11 picker and inserts the best. leadOffsetSec feeds the
-// reprocess-round diversification; label is "recording" or "reprocess #N".
-func (a *App) runNemotron(pcm []float32, leadOffsetSec float64, label string) {
-	a.setState(StateTranscribing)
-	audioSec := float64(len(pcm)) / float64(pcmSampleRateHz)
-	t0 := time.Now()
-	results := a.cfg.Nemotron.Run(pcm, leadOffsetSec, a.multiOn.Load())
-	took := time.Since(t0)
-
-	if len(results) == 0 {
-		log.Printf("%s [nemotron]: %.2fs — no variants (sidecar down?)", label, audioSec)
-		a.setState(StateError)
-		return
-	}
-
-	base := a.appendVariants(results)
-	log.Printf("%s [nemotron]: %.2fs (%d variants, took=%v)", label, audioSec, len(results), took.Round(time.Millisecond))
-	for i, v := range results {
-		log.Printf("  variant %d (score=%.2f): %q", base+i+1, v.Score, v.Text)
-	}
-
-	if err := a.insertText(results[0].Text); err != nil {
-		log.Printf("insert: %v", err)
-		a.setState(StateError)
-		return
-	}
-	a.markInserted(base) // star the Nemotron best in the picker
+	a.markInserted(base) // star the inserted variant in the picker
 	a.setState(StateIdle)
 }
 
@@ -796,8 +625,6 @@ func (a *App) pickCandidate() {
 	if a.cfg.Picker == nil {
 		return
 	}
-	// Snapshot under the lock — the background Nemotron goroutine may be
-	// appending concurrently.
 	vars := a.snapshotVariants()
 	if len(vars) == 0 {
 		return

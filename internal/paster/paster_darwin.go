@@ -37,6 +37,12 @@ import "C"
 
 import "fmt"
 
+// ReleaseModifiers is a no-op on macOS. Its purpose elsewhere is to stop a
+// modifier the user is still holding from joining the synthetic chord; here
+// CGEventSetFlags already states the chord's flags outright (Command alone),
+// so there is no held Shift to strip out of it.
+func (p *Paster) ReleaseModifiers() {}
+
 // Paste synthesises Cmd+V via CGEventPost so it draws on Murrly's own
 // Accessibility grant rather than a child osascript process which would
 // require a separate (and surprising) permission entry.
