@@ -166,13 +166,50 @@ type Clipboard struct {
 	CB         ClipboardBackend
 	Paster     PasterBackend
 	PasteDelay time.Duration
+	// Replace switches the route to its blunt form: publish the text, press
+	// the chord, done. The user's clipboard is not snapshotted and not put
+	// back, and nothing waits to see whether the target read anything.
+	//
+	// It is the answer to the applications this route cannot serve honestly.
+	// Chromium/Electron do not query the selection owner on Ctrl+V — they
+	// paste a cached copy refreshed on the ownership-change notification —
+	// so the read we would time the restore against never arrives, the wait
+	// runs to its full timeout on every insert, and the eventual lazy read
+	// lands AFTER the restore and pastes the user's old clipboard. Not
+	// restoring removes the race outright: whatever reads the selection,
+	// early or late, finds the dictation.
+	//
+	// The price is that dictating costs the user their clipboard, which is
+	// why this is a choice and not the default.
+	Replace bool
 }
 
 func (c *Clipboard) Name() string { return "clipboard" }
 
+// insertReplacing is the whole of the replacing mode: two steps and no
+// waiting for anything unobservable. Deliberately does not call Save
+// either — reading the clipboard means a round trip through whatever
+// process currently owns the selection, and a hung owner blocking there is
+// what stalls the insert before it has even started.
+func (c *Clipboard) insertReplacing(text string) error {
+	if err := c.CB.Set(text); err != nil {
+		return fmt.Errorf("clipboard.Set: %w", err)
+	}
+	// Still needed: an application that has not processed the ownership
+	// change yet pastes its own cache. This margin is the only wait left.
+	time.Sleep(prePasteDelay)
+	if err := c.Paster.Paste(func() {}); err != nil {
+		return fmt.Errorf("paster.Paste: %w", err)
+	}
+	return nil
+}
+
 func (c *Clipboard) Insert(text string) error {
 	if text == "" {
 		return nil
+	}
+	if c.Replace {
+		return c.insertReplacing(text)
 	}
 	saved, err := c.CB.Save()
 	if err != nil {

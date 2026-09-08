@@ -102,7 +102,23 @@ type Actions struct {
 	// state.
 	IsDirectInsert       func() bool
 	OnToggleDirectInsert func() bool
-	IsProfanityRemove    func() bool
+
+	// Clipboard keep-vs-restore toggle ("Затирать буфер обмена"). Applies
+	// only while direct input is off, i.e. while the text goes through the
+	// clipboard. Unchecked (the default) is the classic route: remember the
+	// clipboard, paste, put it back. Checked leaves the dictation in the
+	// clipboard instead.
+	//
+	// The choice exists because neither behaviour is right everywhere.
+	// Restoring is honest in applications that really ask the selection
+	// owner (GTK fields, terminals, Qt). Chromium/Electron never ask — they
+	// paste a cached copy — so there the restore is what hands them the OLD
+	// clipboard, and the wait for a read that never comes is what makes the
+	// insert crawl. Same shape as the toggles above.
+	IsClipboardReplace       func() bool
+	OnToggleClipboardReplace func() bool
+
+	IsProfanityRemove func() bool
 
 	// Multi-inference toggle ("Множественное распознавание"). Same shape
 	// as autostart: OnToggleMulti flips the live state and returns the new

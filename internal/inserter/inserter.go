@@ -127,12 +127,15 @@ const (
 // values, so reaching here with something else means a caller bypassed it,
 // and inserting the dictation by the most compatible route beats dropping
 // it on the floor.
-func ForMode(mode string, typeDelayMs int, cb ClipboardBackend, p PasterBackend, pasteDelay time.Duration) *Chain {
+// replaceClipboard picks which of the two clipboard behaviours the route
+// uses: false (the default) borrows the clipboard and puts it back, true
+// leaves the dictation in it. See Clipboard.Replace.
+func ForMode(mode string, typeDelayMs int, cb ClipboardBackend, p PasterBackend, pasteDelay time.Duration, replaceClipboard bool) *Chain {
 	clip := func() []Inserter {
 		if cb == nil || p == nil {
 			return nil
 		}
-		return []Inserter{&Clipboard{CB: cb, Paster: p, PasteDelay: pasteDelay}}
+		return []Inserter{&Clipboard{CB: cb, Paster: p, PasteDelay: pasteDelay, Replace: replaceClipboard}}
 	}
 	var c *Chain
 	switch mode {

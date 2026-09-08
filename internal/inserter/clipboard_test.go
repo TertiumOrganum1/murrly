@@ -101,3 +101,25 @@ func TestClipboardRouteRestoresAfterAFailedPaste(t *testing.T) {
 		t.Error("clipboard left displaced after a failed paste")
 	}
 }
+
+// TestClipboardReplaceModeSkipsSaveAndRestore pins the second mode: publish,
+// paste, and leave the dictation in the clipboard. No snapshot to stall on
+// and no restore for a late reader to pick up instead of the text.
+func TestClipboardReplaceModeSkipsSaveAndRestore(t *testing.T) {
+	lg := &callLog{}
+	cb := &fakeClipboard{log: lg}
+	pa := &fakePaster{log: lg}
+
+	r := &Clipboard{CB: cb, Paster: pa, PasteDelay: time.Millisecond, Replace: true}
+	if err := r.Insert("диктовка"); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	for _, c := range lg.snapshot() {
+		if c == "save" || c == "restore" {
+			t.Fatalf("replacing mode touched the user's clipboard: %v", lg.snapshot())
+		}
+	}
+	if cb.set != "диктовка" {
+		t.Errorf("clipboard got %q", cb.set)
+	}
+}

@@ -207,6 +207,18 @@ func persistInsertMode(cfgPath string, cfg config.Config, mode string) error {
 	return toml.NewEncoder(f).Encode(cfg)
 }
 
+// persistClipboardReplace writes the keep-vs-restore choice for the paste
+// route to config.toml. Same whole-struct re-encode as the other helpers.
+func persistClipboardReplace(cfgPath string, cfg config.Config, on bool) error {
+	cfg.Output.ClipboardReplace = on
+	f, err := os.Create(cfgPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}
+
 // persistProfanityRemove writes the cut-out-vs-mask choice to config.toml.
 func persistProfanityRemove(cfgPath string, cfg config.Config, on bool) error {
 	cfg.Output.ProfanityRemove = on

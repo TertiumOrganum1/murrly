@@ -134,6 +134,22 @@ type OutputConfig struct {
 	//
 	// Unknown / missing values normalise to hybrid on load.
 	InsertMode string `toml:"insert_mode"`
+	// ClipboardReplace picks which of the two clipboard behaviours the paste
+	// route uses. Only meaningful while the text actually goes through the
+	// clipboard (insert_mode = clipboard, or the tail of hybrid).
+	//
+	//	false (default) — сохраняющий: remember the clipboard, put the
+	//	                  dictation in, press Ctrl+V, put the old content
+	//	                  back. Honest in applications that really ask the
+	//	                  selection owner (GTK fields, terminals, Qt).
+	//	true            — затирающий: put the dictation in, press Ctrl+V,
+	//	                  leave it there. For Chromium/Electron, which paste
+	//	                  from their own cache — there the restore is what
+	//	                  delivers the OLD clipboard, and the wait for a read
+	//	                  that never comes is what stalls the insert.
+	//
+	// Flipped at runtime from the tray and persisted here.
+	ClipboardReplace bool `toml:"clipboard_replace"`
 	// TypeDelayMs is the per-keystroke delay for the typing route. Small
 	// values are fast but some applications drop characters when fed
 	// faster than they redraw; raise it if a long phrase arrives mangled.

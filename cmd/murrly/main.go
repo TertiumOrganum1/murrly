@@ -435,7 +435,7 @@ func main() {
 	pasteDelay := time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond
 	buildRoutes := func(mode string) *inserter.Chain {
 		return inserter.ForMode(mode, cfg.Output.TypeDelayMs,
-			clipAdapter{cb}, paster.New(), pasteDelay)
+			clipAdapter{cb}, paster.New(), pasteDelay, cfg.Output.ClipboardReplace)
 	}
 	insertRoutes := buildRoutes(cfg.Output.InsertMode)
 	log.Printf("insert: mode %q (routes: %s)", cfg.Output.InsertMode, insertRoutes.Name())
@@ -464,6 +464,28 @@ func main() {
 		}
 		cfg.Output.InsertMode = mode
 		log.Printf("insert: mode %q (routes: %s)", mode, routes.Name())
+		return on
+	}
+
+	// Tray toggle: what the clipboard route does with the user's own
+	// clipboard. Rebuilds the chain so the choice applies to the next
+	// dictation without a restart, exactly like the toggle above.
+	actions.IsClipboardReplace = func() bool { return cfg.Output.ClipboardReplace }
+	actions.OnToggleClipboardReplace = func() bool {
+		on := !cfg.Output.ClipboardReplace
+		cfg.Output.ClipboardReplace = on
+		routes := buildRoutes(cfg.Output.InsertMode)
+		if a != nil {
+			a.SetInserter(routes)
+		}
+		if err := persistClipboardReplace(cfgPath, cfg, on); err != nil {
+			log.Printf("clipboard-replace persist: %v", err)
+		}
+		if on {
+			log.Printf("insert: clipboard mode — затирающий (буфер остаётся с диктовкой)")
+		} else {
+			log.Printf("insert: clipboard mode — сохраняющий (буфер возвращается)")
+		}
 		return on
 	}
 

@@ -183,6 +183,13 @@ func (t *Tray) onReady() {
 	directChecked := t.actions.IsDirectInsert != nil && t.actions.IsDirectInsert()
 	directItem := systray.AddMenuItemCheckbox("Прямой ввод", "Вставлять текст прямо в поле (через шину доступности, иначе набором на клавиатуре), не трогая буфер обмена. Выключено — прежний способ: подменить буфер, нажать Ctrl+V, вернуть обратно. Прямой ввод не может потерять буфер, но длинную фразу набирает несколько секунд", directChecked)
 
+	clipReplaceChecked := t.actions.IsClipboardReplace != nil && t.actions.IsClipboardReplace()
+	clipReplaceItem := systray.AddMenuItemCheckbox("Затирать буфер обмена", "Только для вставки через буфер обмена. Выключено — прежний способ: запомнить буфер, вставить, вернуть исходное. Включено — распознанная фраза просто остаётся в буфере: ничего не ждём и не возвращаем, поэтому Chromium/Electron не подсовывают прошлое содержимое", clipReplaceChecked)
+	// Meaningless while the text goes straight into the field.
+	if directChecked {
+		clipReplaceItem.Disable()
+	}
+
 	profanityRemoveChecked := t.actions.IsProfanityRemove != nil && t.actions.IsProfanityRemove()
 	profanityRemoveItem := systray.AddMenuItemCheckbox("Вырезать, а не маскировать", "Когда «Фильтр лексики» включён — вырезать обсценные слова целиком (с прилегающей пунктуацией), а не закрывать «•». Обратимо: оригинал хранится без цензуры", profanityRemoveChecked)
 	// The cut-out option only applies while the filter is on — grey it out
@@ -408,8 +415,18 @@ func (t *Tray) onReady() {
 				if t.actions.OnToggleDirectInsert != nil {
 					if t.actions.OnToggleDirectInsert() {
 						directItem.Check()
+						clipReplaceItem.Disable()
 					} else {
 						directItem.Uncheck()
+						clipReplaceItem.Enable()
+					}
+				}
+			case <-clipReplaceItem.ClickedCh:
+				if t.actions.OnToggleClipboardReplace != nil {
+					if t.actions.OnToggleClipboardReplace() {
+						clipReplaceItem.Check()
+					} else {
+						clipReplaceItem.Uncheck()
 					}
 				}
 			case <-profanityItem.ClickedCh:

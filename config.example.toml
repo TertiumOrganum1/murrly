@@ -32,6 +32,15 @@ frontend, backend, service mesh.
 [output]
 paste_delay_ms = 80
 restore_primary = true
+# Что вставка через буфер обмена делает с содержимым буфера.
+# false (по умолчанию) — сохраняющий режим: запомнить буфер, положить туда
+#   диктовку, нажать Ctrl+V, вернуть исходное. Честно работает там, где
+#   приложение действительно спрашивает владельца выделения (GTK, терминалы, Qt).
+# true — затирающий: положить диктовку и оставить её в буфере. Для
+#   Chromium/Electron, которые вставляют из своего кэша: там возврат буфера как
+#   раз и подсовывает прошлое содержимое, а ожидание чтения тормозит вставку.
+# Переключается в трее пунктом «Затирать буфер обмена».
+clipboard_replace = false
 # Mask Russian obscene words (мат) with "•" at display and insertion only;
 # the recognized text is always stored/scored uncensored. Toggle live from
 # the tray ("Фильтр мата"). On by default.
