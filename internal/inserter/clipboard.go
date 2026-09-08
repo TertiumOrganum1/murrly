@@ -182,16 +182,60 @@ type Clipboard struct {
 	// The price is that dictating costs the user their clipboard, which is
 	// why this is a choice and not the default.
 	Replace bool
+
+	// OnDisplaced receives the clipboard snapshot taken immediately before
+	// the replacing route overwrites it — the opaque value the backend's
+	// Save returned, unexamined here as everywhere else on this route. The
+	// caller keeps it somewhere the user can ask for it back; nil means
+	// nobody is collecting and the snapshot is skipped entirely.
+	//
+	// This is not the restore that the preserving mode does. Nothing is put
+	// back on its own and no timing depends on it: the snapshot is taken
+	// before the paste, under displacedSnapshotWait, and an owner that does
+	// not answer in that time costs the insert nothing.
+	OnDisplaced func(any)
+}
+
+// displacedSnapshotWait bounds the courtesy read of the clipboard that the
+// replacing route is about to overwrite. Short on purpose — reading a
+// selection means a round trip to whatever process owns it, and the whole
+// argument for the replacing route is that it never blocks on one.
+const displacedSnapshotWait = 300 * time.Millisecond
+
+// snapshotBackend is a ClipboardBackend that can bound its own read. Linux
+// implements it because there the read leaves the process; the platforms
+// where it does not are served by the plain Save below.
+type snapshotBackend interface {
+	SaveWithin(time.Duration) (any, error)
+}
+
+// stashDisplaced hands the current clipboard to OnDisplaced before it is
+// overwritten. Every failure here is silent by design: the snapshot is a
+// convenience, and the dictation must land either way.
+func (c *Clipboard) stashDisplaced() {
+	if c.OnDisplaced == nil {
+		return
+	}
+	save := c.CB.Save
+	if sb, ok := c.CB.(snapshotBackend); ok {
+		save = func() (any, error) { return sb.SaveWithin(displacedSnapshotWait) }
+	}
+	prev, err := save()
+	if err != nil {
+		log.Printf("clipboard: could not snapshot the clipboard before overwriting it: %v", err)
+		return
+	}
+	c.OnDisplaced(prev)
 }
 
 func (c *Clipboard) Name() string { return "clipboard" }
 
-// insertReplacing is the whole of the replacing mode: two steps and no
-// waiting for anything unobservable. Deliberately does not call Save
-// either — reading the clipboard means a round trip through whatever
-// process currently owns the selection, and a hung owner blocking there is
-// what stalls the insert before it has even started.
+// insertReplacing is the whole of the replacing mode: publish, press the
+// chord, done — no waiting for anything unobservable, and nothing put back.
+// The one read it does make, the snapshot for the menu, is bounded so short
+// that a hung selection owner cannot stall the insert before it starts.
 func (c *Clipboard) insertReplacing(text string) error {
+	c.stashDisplaced()
 	if err := c.CB.Set(text); err != nil {
 		return fmt.Errorf("clipboard.Set: %w", err)
 	}

@@ -433,9 +433,23 @@ func main() {
 	t = tray.New(icons, actions)
 
 	pasteDelay := time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond
+	// Where the clipboard the replacing insert overwrites goes, so the tray
+	// can hand it back. In memory only and one slot deep — see clipboard.Stash.
+	displaced := &clipboard.Stash{}
 	buildRoutes := func(mode string) *inserter.Chain {
-		return inserter.ForMode(mode, cfg.Output.TypeDelayMs,
+		routes := inserter.ForMode(mode, cfg.Output.TypeDelayMs,
 			clipAdapter{cb}, paster.New(), pasteDelay, cfg.Output.ClipboardReplace)
+		routes.OnClipboardDisplaced(func(prev any) {
+			s, ok := prev.(clipboard.Saved)
+			if !ok || !s.HasContent {
+				return
+			}
+			displaced.Put(s)
+			if t != nil {
+				t.SetDisplacedClipboard(true)
+			}
+		})
+		return routes
 	}
 	insertRoutes := buildRoutes(cfg.Output.InsertMode)
 	log.Printf("insert: mode %q (routes: %s)", cfg.Output.InsertMode, insertRoutes.Name())
@@ -487,6 +501,23 @@ func main() {
 			log.Printf("insert: clipboard mode — сохраняющий (буфер возвращается)")
 		}
 		return on
+	}
+
+	// The safety net for the replacing mode: put back what the last insert
+	// overwrote. Peek rather than take — the snapshot stays available, since
+	// the user may restore it, copy something else by accident, and want it
+	// again.
+	actions.OnRestoreDisplacedClipboard = func() bool {
+		s, ok := displaced.Peek()
+		if !ok {
+			return false
+		}
+		if err := cb.Restore(s); err != nil {
+			log.Printf("clipboard: could not put the previous content back: %v", err)
+			return false
+		}
+		log.Printf("clipboard: previous content put back from the menu")
+		return true
 	}
 
 	// pasteLast backs Shift+F12: put the phrase recognised last on the
@@ -959,6 +990,13 @@ type clipAdapter struct{ *clipboard.Clipboard }
 
 func (a clipAdapter) Save() (any, error) {
 	s, err := a.Clipboard.Save()
+	return s, err
+}
+
+// SaveWithin is the bounded snapshot the replacing insert takes of the
+// clipboard it is about to overwrite (inserter.snapshotBackend).
+func (a clipAdapter) SaveWithin(budget time.Duration) (any, error) {
+	s, err := a.Clipboard.SaveWithin(budget)
 	return s, err
 }
 

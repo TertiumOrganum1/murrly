@@ -64,20 +64,46 @@ const xclipReadTimeout = 2 * time.Second
 // (which callers translate into "no content, keep going" rather than a
 // fatal error).
 func xclipOutput(args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), xclipReadTimeout)
+	return xclipOutputWithin(xclipReadTimeout, args...)
+}
+
+// xclipOutputWithin is xclipOutput under a caller-chosen budget. Used by
+// SaveWithin, where the snapshot is a courtesy rather than a requirement
+// and must never hold up the insert it precedes.
+func xclipOutputWithin(timeout time.Duration, args ...string) ([]byte, error) {
+	if timeout <= 0 {
+		return nil, context.DeadlineExceeded
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "xclip", args...).Output()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		log.Printf("clipboard: xclip %v timed out after %v — likely a hung selection owner; ignoring", args, xclipReadTimeout)
+		log.Printf("clipboard: xclip %v timed out after %v — likely a hung selection owner; ignoring", args, timeout)
 		return nil, context.DeadlineExceeded
 	}
 	return out, err
 }
 
-func (c *Clipboard) Save() (Saved, error) {
-	s := Saved{}
+func (c *Clipboard) Save() (Saved, error) { return c.SaveWithin(xclipReadTimeout) }
 
-	targets, err := readTargets("clipboard")
+// SaveWithin is Save under a deadline the caller picks, spanning both xclip
+// calls (the TARGETS probe and the payload read) rather than each of them.
+//
+// It exists for the replacing insert route, which snapshots the clipboard
+// purely so the user can get it back from the menu afterwards. There the
+// read is optional: a selection owner that does not answer promptly must
+// cost the dictation nothing, so the budget runs out and the snapshot is
+// simply skipped. Save's own two seconds are the opposite trade — that path
+// has to put the clipboard back, so it is worth waiting for.
+//
+// Images come along the same way they do in Save: a screenshot advertises
+// image/png, the bytes are read through that target and stashed verbatim,
+// and Restore re-publishes them.
+func (c *Clipboard) SaveWithin(budget time.Duration) (Saved, error) {
+	s := Saved{}
+	deadline := time.Now().Add(budget)
+
+	targets, err := readTargets(time.Until(deadline), "clipboard")
 	if err != nil {
 		return s, fmt.Errorf("read clipboard targets: %w", err)
 	}
@@ -89,7 +115,7 @@ func (c *Clipboard) Save() (Saved, error) {
 		// output would corrupt binary data to UTF-8 mush, which is
 		// what was killing user screenshots after a dictation cycle.
 		if binTarget := pickBinaryTarget(targets); binTarget != "" {
-			data, err := xclipOutput("-selection", "clipboard", "-t", binTarget, "-o")
+			data, err := xclipOutputWithin(time.Until(deadline), "-selection", "clipboard", "-t", binTarget, "-o")
 			if err != nil {
 				// Read failed (hung owner, etc.) — don't error out the
 				// whole insert; just give up on saving this clipboard so
@@ -100,7 +126,7 @@ func (c *Clipboard) Save() (Saved, error) {
 				s.Target = binTarget
 			}
 		} else {
-			out, err := xclipOutput("-selection", "clipboard", "-o")
+			out, err := xclipOutputWithin(time.Until(deadline), "-selection", "clipboard", "-o")
 			if err != nil {
 				s.HasContent = false
 			} else {
@@ -330,8 +356,8 @@ func (c *Clipboard) Restore(s Saved) error {
 // current selection owner, or an empty slice when the selection is
 // empty (xclip returns non-zero exit then — we treat that as "no
 // content" rather than an error).
-func readTargets(sel string) ([]string, error) {
-	out, err := xclipOutput("-selection", sel, "-t", "TARGETS", "-o")
+func readTargets(timeout time.Duration, sel string) ([]string, error) {
+	out, err := xclipOutputWithin(timeout, "-selection", sel, "-t", "TARGETS", "-o")
 	if err != nil {
 		return nil, nil
 	}
@@ -491,7 +517,7 @@ func restoredOK(s Saved) bool {
 	}
 	time.Sleep(restoreSettleDelay)
 	if s.Target != "" {
-		targets, _ := readTargets("clipboard")
+		targets, _ := readTargets(xclipReadTimeout, "clipboard")
 		return containsTarget(targets, s.Target)
 	}
 	out, err := xclipOutput("-selection", "clipboard", "-o")

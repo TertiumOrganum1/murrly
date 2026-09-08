@@ -118,6 +118,11 @@ func writeFormat(format uintptr, data []byte) error {
 	return nil
 }
 
+// SaveWithin ignores the budget: the Win32 clipboard is a shared buffer read
+// directly, with no owning process to wait on. Present so callers need not
+// care which platform they are on.
+func (c *Clipboard) SaveWithin(time.Duration) (Saved, error) { return c.Save() }
+
 func (c *Clipboard) Save() (Saved, error) {
 	if !openClipboard() {
 		log.Printf("clipboard: could not open for save; skipping snapshot")

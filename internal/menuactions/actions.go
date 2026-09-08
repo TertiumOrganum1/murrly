@@ -118,6 +118,14 @@ type Actions struct {
 	IsClipboardReplace       func() bool
 	OnToggleClipboardReplace func() bool
 
+	// OnRestoreDisplacedClipboard puts back whatever the replacing insert
+	// overwrote last — the safety net that makes "затирать буфер обмена"
+	// survivable: the content is snapshotted just before it is displaced,
+	// and this hands it back on demand. Returns whether anything was
+	// restored. The item is hidden until there is something to offer, which
+	// the renderer learns from the tray's SetDisplacedClipboard.
+	OnRestoreDisplacedClipboard func() bool
+
 	IsProfanityRemove func() bool
 
 	// Multi-inference toggle ("Множественное распознавание"). Same shape

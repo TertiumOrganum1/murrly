@@ -5,6 +5,8 @@
 // when the selection has non-text targets.
 package clipboard
 
+import "sync"
+
 type Saved struct {
 	Text       string
 	HasContent bool
@@ -24,6 +26,37 @@ type Saved struct {
 	// previous clipboard exactly — including non-text content. On Linux
 	// it's unused (Binary / Target cover the non-text case).
 	platformState uintptr
+}
+
+// Stash holds the one clipboard snapshot taken before a replacing insert
+// overwrote it, so the menu can offer it back. Exactly one slot: the point
+// is undoing the last accident, not keeping a history — and a history of
+// other applications' clipboards is a pile of passwords nobody asked us to
+// collect. For the same reason it lives in memory only and is gone at exit.
+type Stash struct {
+	mu    sync.Mutex
+	saved Saved
+	has   bool
+}
+
+// Put replaces the stashed snapshot. Content-free snapshots are dropped:
+// re-publishing an empty clipboard is not a restore, it is a wipe.
+func (s *Stash) Put(v Saved) {
+	if !v.HasContent {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saved, s.has = v, true
+}
+
+// Peek returns the stashed snapshot without consuming it — the user may want
+// it back more than once, and nothing else overwrites it until the next
+// replacing insert.
+func (s *Stash) Peek() (Saved, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saved, s.has
 }
 
 type Clipboard struct {

@@ -24,6 +24,7 @@ type Tray struct {
 	icons           map[State][]byte
 	stateCh         chan State
 	transcriptCh    chan []string
+	displacedCh     chan bool
 	activeModelCh   chan int
 	activeScoringCh chan int
 	actions         *menuactions.Actions
@@ -34,6 +35,7 @@ func New(icons map[State][]byte, actions *menuactions.Actions) *Tray {
 		icons:           icons,
 		stateCh:         make(chan State, 8),
 		transcriptCh:    make(chan []string, 8),
+		displacedCh:     make(chan bool, 8),
 		activeModelCh:   make(chan int, 8),
 		activeScoringCh: make(chan int, 8),
 		actions:         actions,
@@ -62,6 +64,16 @@ func (t *Tray) SetRecentTranscripts(items []string) {
 	copy(copyItems, items)
 	select {
 	case t.transcriptCh <- copyItems:
+	default:
+	}
+}
+
+// SetDisplacedClipboard shows or hides the "previous clipboard" item. Called
+// once the replacing insert has actually displaced something, so a session
+// that never overwrote a clipboard never grows a row that would do nothing.
+func (t *Tray) SetDisplacedClipboard(has bool) {
+	select {
+	case t.displacedCh <- has:
 	default:
 	}
 }
@@ -100,7 +112,7 @@ func (t *Tray) onReady() {
 	// menu is to recopy a recent recognition, so it lives at the top. The
 	// count comes from config (output.recent_transcripts, default 20). Empty
 	// slots are hidden so a fresh start isn't a wall of "—" rows; each fills
-	// and shows as recognitions arrive (updateTranscriptMenuItems).
+	// and shows as recognitions arrive (transcriptSlots.render).
 	recentCount := t.actions.RecentCount
 	if recentCount <= 0 {
 		recentCount = 3
@@ -117,6 +129,23 @@ func (t *Tray) onReady() {
 			}
 		}()
 	}
+
+	slots := newTranscriptSlots(copyItems)
+
+	// Directly under the phrase slots, and for the same reason: this is the
+	// other thing the menu hands back to the clipboard. It only ever appears
+	// in the replacing mode, where the dictation overwrites whatever was
+	// there — the content is snapshotted just before that happens and this
+	// puts it back. Hidden until there is a snapshot to offer.
+	displacedItem := systray.AddMenuItem("Вернуть прежний буфер обмена", "Положить обратно то, что лежало в буфере обмена до последней вставки, затершей его (текст или картинку)")
+	displacedItem.Hide()
+	go func() {
+		for range displacedItem.ClickedCh {
+			if t.actions.OnRestoreDisplacedClipboard != nil {
+				t.actions.OnRestoreDisplacedClipboard()
+			}
+		}
+	}()
 
 	// "Reprocess last" — re-runs the most recent recording through
 	// the engines with a small silence prefix. Cheap manual retry when
@@ -362,7 +391,13 @@ func (t *Tray) onReady() {
 				systray.SetTooltip("Murrly: " + stateName(s))
 			case items := <-t.transcriptCh:
 				lastTranscripts = items
-				updateTranscriptMenuItems(copyItems, items)
+				slots.render(items)
+			case has := <-t.displacedCh:
+				if has {
+					displacedItem.Show()
+				} else {
+					displacedItem.Hide()
+				}
 			case idx := <-t.activeModelCh:
 				for i, item := range modelItems {
 					if i == idx {
@@ -439,7 +474,7 @@ func (t *Tray) onReady() {
 						profanityRemoveItem.Disable()
 					}
 					// Re-censor (or restore) the recent-phrase titles at once.
-					updateTranscriptMenuItems(copyItems, lastTranscripts)
+					slots.render(lastTranscripts)
 				}
 			case <-profanityRemoveItem.ClickedCh:
 				if t.actions.OnToggleProfanityRemove != nil {
@@ -448,7 +483,7 @@ func (t *Tray) onReady() {
 					} else {
 						profanityRemoveItem.Uncheck()
 					}
-					updateTranscriptMenuItems(copyItems, lastTranscripts)
+					slots.render(lastTranscripts)
 				}
 			case <-quitItem.ClickedCh:
 				if t.actions.OnQuit != nil {
@@ -491,18 +526,69 @@ func stateName(s State) string {
 	}
 }
 
-func updateTranscriptMenuItems(menuItems []*systray.MenuItem, transcripts []string) {
-	for i, item := range menuItems {
+// transcriptSlots owns the recent-phrase rows and remembers what each one is
+// currently showing.
+//
+// The memory is the point. Every write to a row — a title, a show, a hide —
+// is a D-Bus property update to the desktop's tray applet, and any of them
+// makes it rebuild the whole menu. Re-rendering all twenty rows on every
+// dictation meant sixty updates and a full rebuild each time a single new
+// phrase arrived at the top. Cinnamon's xapp-sn-watcher does not survive that
+// indefinitely: it starts destroying its own menu windows and then fails an
+// assertion on every attempt to show one, which reads to the user as the
+// desktop freezing for seconds at a time.
+//
+// So: compare against what is already on screen and write only the rows that
+// actually differ. A new phrase touches one row and shifts the rest down;
+// nothing else moves.
+type transcriptSlots struct {
+	items []menuRow
+	// shown[i] is the title row i is displaying, "" while it is hidden.
+	shown []string
+}
+
+// menuRow is the part of *systray.MenuItem these rows use — an interface only
+// so a test can count how many writes a render actually makes, which is the
+// entire point of the type.
+type menuRow interface {
+	SetTitle(string)
+	Enable()
+	Show()
+	Hide()
+}
+
+func newTranscriptSlots(items []*systray.MenuItem) *transcriptSlots {
+	rows := make([]menuRow, len(items))
+	for i, it := range items {
+		rows[i] = it
+	}
+	// The rows are created hidden, so every slot starts out showing nothing.
+	return &transcriptSlots{items: rows, shown: make([]string, len(items))}
+}
+
+func (s *transcriptSlots) render(transcripts []string) {
+	for i, item := range s.items {
+		want := ""
 		if i < len(transcripts) && transcripts[i] != "" {
 			// Censor only the displayed title (toggle-gated, no-op when off);
 			// the stored phrase stays uncensored.
-			item.SetTitle(transcriptPreview(ruprofane.Filter(transcripts[i]), 56))
-			item.Enable()
-			item.Show()
-		} else {
+			want = transcriptPreview(ruprofane.Filter(transcripts[i]), 56)
+		}
+		if want == s.shown[i] {
+			continue
+		}
+		switch {
+		case want == "":
 			// Empty slot — hide it so the menu shows only real phrases.
 			item.Hide()
+		case s.shown[i] == "":
+			item.SetTitle(want)
+			item.Enable()
+			item.Show()
+		default:
+			item.SetTitle(want)
 		}
+		s.shown[i] = want
 	}
 }
 

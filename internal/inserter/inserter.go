@@ -63,6 +63,20 @@ type Chain struct {
 
 func NewChain(routes ...Inserter) *Chain { return &Chain{routes: routes} }
 
+// OnClipboardDisplaced wires the displaced-clipboard callback into whichever
+// clipboard route the chain ended up with, so the caller can collect what a
+// replacing insert overwrites without ForMode growing another parameter for
+// something only one route understands. A chain without a clipboard route
+// (pure direct input) silently ignores it — there is nothing there to
+// displace.
+func (c *Chain) OnClipboardDisplaced(fn func(any)) {
+	for _, r := range c.routes {
+		if clip, ok := r.(*Clipboard); ok {
+			clip.OnDisplaced = fn
+		}
+	}
+}
+
 // failureSuffix appends what the earlier routes complained about, so a slow
 // or surprising delivery can be traced without turning on anything extra.
 func failureSuffix(failures []string) string {

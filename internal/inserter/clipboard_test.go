@@ -123,3 +123,68 @@ func TestClipboardReplaceModeSkipsSaveAndRestore(t *testing.T) {
 		t.Errorf("clipboard got %q", cb.set)
 	}
 }
+
+// budgetedClipboard is a fakeClipboard that also honours the bounded read
+// the replacing route prefers (inserter.snapshotBackend).
+type budgetedClipboard struct {
+	fakeClipboard
+	budget time.Duration
+}
+
+func (c *budgetedClipboard) SaveWithin(d time.Duration) (any, error) {
+	c.budget = d
+	return c.Save()
+}
+
+func TestClipboardReplaceModeStashesWhatItOverwrites(t *testing.T) {
+	lg := &callLog{}
+	cb := &budgetedClipboard{fakeClipboard: fakeClipboard{log: lg}}
+	pa := &fakePaster{log: lg}
+	var displaced any
+	r := &Clipboard{CB: cb, Paster: pa, PasteDelay: time.Millisecond, Replace: true,
+		OnDisplaced: func(prev any) { displaced = prev }}
+
+	if err := r.Insert("диктовка"); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	if displaced != "snapshot" {
+		t.Errorf("displaced content = %v, want the snapshot taken before Set", displaced)
+	}
+	if cb.budget != displacedSnapshotWait {
+		t.Errorf("snapshot read budget = %v, want %v", cb.budget, displacedSnapshotWait)
+	}
+	// The snapshot has to happen before the overwrite, or it snapshots our
+	// own dictation; and it must not turn into a restore afterwards.
+	want := []string{"save", "set", "paste"}
+	got := lg.snapshot()
+	if len(got) != len(want) {
+		t.Fatalf("calls = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("calls = %v, want %v", got, want)
+		}
+	}
+}
+
+// A backend that cannot answer within the budget must not stop the insert:
+// the dictation still lands, there is just nothing to offer in the menu.
+func TestClipboardReplaceModeInsertsWhenSnapshotFails(t *testing.T) {
+	lg := &callLog{}
+	cb := &fakeClipboard{log: lg, saveErr: errors.New("hung selection owner")}
+	pa := &fakePaster{log: lg}
+	called := false
+	r := &Clipboard{CB: cb, Paster: pa, PasteDelay: time.Millisecond, Replace: true,
+		OnDisplaced: func(any) { called = true }}
+
+	if err := r.Insert("диктовка"); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if called {
+		t.Error("a failed snapshot was handed to OnDisplaced anyway")
+	}
+	if cb.set != "диктовка" {
+		t.Errorf("clipboard got %q, want the dictation inserted regardless", cb.set)
+	}
+}

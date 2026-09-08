@@ -12,6 +12,7 @@ import "C"
 
 import (
 	"fmt"
+	"time"
 	"unsafe"
 )
 
@@ -26,6 +27,12 @@ type pasteTracker struct{}
 //
 // macOS has no separate "primary" selection — Primary / HasPrimary stay
 // zero.
+// SaveWithin ignores the budget: NSPasteboard is read out of the process's
+// own address space, so there is no selection owner to hang on and nothing
+// for a deadline to protect against. Present so callers need not care which
+// platform they are on.
+func (c *Clipboard) SaveWithin(time.Duration) (Saved, error) { return c.Save() }
+
 func (c *Clipboard) Save() (Saved, error) {
 	token := C.mur_clip_save_state()
 	if token == nil {
