@@ -46,6 +46,17 @@ func (c *Clipboard) Publish(text string) (func(), error) {
 	return func() {}, nil
 }
 
+// PublishAndHold is Publish: there is nothing to hold onto. NSPasteboard keeps
+// the text on its own, so the distinction the X11 implementation draws between
+// publishing and holding does not exist here.
+func (c *Clipboard) PublishAndHold(text string) error {
+	if err := c.writeText(text); err != nil {
+		return err
+	}
+	markOurs(text)
+	return nil
+}
+
 // Set replaces the pasteboard with a single UTF-8 plain text item at the
 // user's request, so the text counts as theirs — see forgetOurs.
 func (c *Clipboard) Set(text string) error {

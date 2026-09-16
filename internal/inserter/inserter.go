@@ -96,10 +96,14 @@ func (c *Chain) Insert(text string) error {
 		err := r.Insert(text)
 		timings = append(timings, fmt.Sprintf("%s=%v", r.Name(), time.Since(routeStart).Round(time.Millisecond)))
 		if err == nil {
-			log.Printf("insert: %d chars via %s in %v (settle=%v, %s)%s",
+			// The wall clock is here to sub-second precision on purpose: the
+			// clipboard trace prints the same, and lining the two up is the
+			// only way to see how long the application took to notice the
+			// paste chord. The log's own prefix stops at whole seconds.
+			log.Printf("insert: %d chars via %s in %v (settle=%v, %s), chord sent at %s%s",
 				len([]rune(text)), r.Name(), time.Since(started).Round(time.Millisecond),
 				settled.Sub(started).Round(time.Millisecond), strings.Join(timings, " "),
-				failureSuffix(failures))
+				time.Now().Format("15:04:05.000"), failureSuffix(failures))
 			return nil
 		}
 		failures = append(failures, fmt.Sprintf("%s: %v", r.Name(), err))

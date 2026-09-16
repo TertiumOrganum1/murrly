@@ -127,6 +127,26 @@ type OutputConfig struct {
 	// the whole editor. Ctrl+Shift+F12 applies the same mid-sentence
 	// transform with no reading at all, which covers the common case.
 	ContextInsert bool `toml:"context_insert"`
+	// SnapshotClipboard — when true, what the user had in the clipboard is
+	// copied into Murrly's memory when a recording starts, so the tray can
+	// offer it back after the dictation overwrote it. Text goes back into the
+	// clipboard; a picture is written to a file instead.
+	//
+	// On by default. It is worth knowing why it is safe, because on X11 this
+	// is the one clipboard operation Murrly performs that is a request made OF
+	// another application: it asks whatever currently owns the clipboard to
+	// hand its content over, and a busy Electron window answers when it gets
+	// round to it — which has been measured in seconds on this desktop.
+	//
+	// What makes that harmless is where it runs. The snapshot is taken when
+	// the recording STARTS, in its own goroutine: the user is mid-sentence,
+	// nobody is waiting, and the insert path never touches it. A slow or
+	// hung owner costs a missed snapshot and nothing else. Turn this off if
+	// even that background read is unwelcome.
+	//
+	// macOS and Windows have a real clipboard store with no owning process,
+	// so there the read is free and the question does not arise.
+	SnapshotClipboard bool `toml:"snapshot_clipboard"`
 	// RecentTranscripts — how many of the latest recognized phrases the tray
 	// menu keeps as clickable copy slots. Default 20; clamped to [1,50] on
 	// load. Applies on all platforms.
@@ -204,7 +224,7 @@ func defaults() Config {
 			PreferredGPU:        "weakest", // gpucheck.WeakestName — leave the faster card free for other GPU work
 		},
 		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ProfanityRemove: true, ContextInsert: false, RecentTranscripts: 20,
-			InsertMode: InsertClipboard, TypeDelayMs: defaultTypeDelayMs},
+			SnapshotClipboard: true, InsertMode: InsertClipboard, TypeDelayMs: defaultTypeDelayMs},
 	}
 }
 

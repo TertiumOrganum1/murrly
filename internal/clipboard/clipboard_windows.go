@@ -140,6 +140,17 @@ func (c *Clipboard) Publish(text string) (func(), error) {
 	return func() {}, nil
 }
 
+// PublishAndHold is Publish: there is nothing to hold onto. The Win32
+// clipboard keeps the text itself, so the distinction the X11 implementation
+// draws between publishing and holding does not exist here.
+func (c *Clipboard) PublishAndHold(text string) error {
+	if err := c.writeText(text); err != nil {
+		return err
+	}
+	markOurs(text)
+	return nil
+}
+
 // Set writes text at the user's request, so it counts as theirs from then on
 // — see forgetOurs.
 func (c *Clipboard) Set(text string) error {

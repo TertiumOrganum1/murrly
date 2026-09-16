@@ -433,6 +433,11 @@ func main() {
 	// Where the clipboard a dictation overwrites goes, so the tray can hand it
 	// back. In memory only and one slot deep — see clipboard.Stash.
 	displaced := &clipboard.Stash{}
+	// On unless the config says otherwise. It is the one clipboard operation
+	// that waits on another application, which is survivable only because of
+	// where it runs — see OutputConfig.SnapshotClipboard and the goroutine
+	// below.
+	clipboard.EnableSnapshot(cfg.Output.SnapshotClipboard)
 	// snapshotClipboard runs when the recording starts, not when the text is
 	// ready: the user is speaking, so a read of somebody else's selection costs
 	// nothing that anybody waits for, and the insert path stays free of it. In

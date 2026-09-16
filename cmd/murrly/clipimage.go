@@ -11,16 +11,21 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/clipboard"
 )
 
-// A picture the user had in the clipboard can be kept, but it can never go
-// back into the clipboard — so the way out is a file.
+// A picture the user had in the clipboard is kept, but the way back out is a
+// file rather than the clipboard.
 //
-// The reason is xclip: it serves its payload for ANY target it is asked for,
-// ignoring what it advertised in TARGETS. Republish a PNG and every Ctrl+V of
-// text anywhere on the desktop comes back with PNG bytes in it, which is worse
-// than the image simply being gone (a well-behaved owner at least refuses the
-// conversion). Doing it properly means Murrly becoming a real selection owner,
-// INCR protocol and all, and owning the clipboard is the thing we spent this
-// whole rewrite getting out of. A file on disk loses nothing and risks nothing.
+// That used to be forced on us by xclip, which served its payload for ANY
+// target it was asked for: republish a PNG through it and every Ctrl+V of text
+// anywhere on the desktop came back with PNG bytes in it. xclip is gone now
+// and Murrly is a real selection owner that refuses targets it cannot produce
+// (internal/clipboard/x11owner_linux.go), so putting a picture back would no
+// longer poison anything.
+//
+// It is still a file, now by choice. Serving the image means holding megabytes
+// as the live clipboard for the rest of the session, and answering INCR
+// transfers for them, in aid of undoing one accident. A file is durable, is
+// where the user's other screenshots already live, and survives Murrly
+// exiting — which a selection never does.
 
 // imageExtensions maps the X11 selection target (which is the MIME type) to
 // the extension to save under. Anything unlisted keeps the subtype verbatim.

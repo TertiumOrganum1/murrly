@@ -42,6 +42,15 @@ func (c *fakeClipboard) Publish(text string) (func(), error) {
 	}, nil
 }
 
+func (c *fakeClipboard) PublishAndHold(text string) error {
+	c.log.add("publish")
+	if c.publishErr != nil {
+		return c.publishErr
+	}
+	c.published = text
+	return nil
+}
+
 type fakePaster struct {
 	log *callLog
 	err error
@@ -65,7 +74,10 @@ func wantCalls(t *testing.T, got, want []string) {
 	}
 }
 
-func TestClipboardRoutePublishesPastesAndLetsGo(t *testing.T) {
+// The selection is kept rather than handed back — see the comment at the top
+// of clipboard.go. Anything that comes for the dictation late is then answered
+// by our own owner instead of by the desktop's clipboard manager.
+func TestClipboardRoutePublishesAndPastesWithoutLettingGo(t *testing.T) {
 	lg := &callLog{}
 	cb := &fakeClipboard{log: lg}
 	pa := &fakePaster{log: lg}
@@ -73,25 +85,25 @@ func TestClipboardRoutePublishesPastesAndLetsGo(t *testing.T) {
 	if err := (&Clipboard{CB: cb, Paster: pa}).Insert("диктовка"); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	wantCalls(t, lg.snapshot(), []string{"publish", "paste", "release"})
+	wantCalls(t, lg.snapshot(), []string{"publish", "paste"})
 	if cb.published != "диктовка" {
 		t.Errorf("clipboard got %q", cb.published)
 	}
+	if cb.releases != 0 {
+		t.Errorf("released %d times, want 0 — the selection is kept", cb.releases)
+	}
 }
 
-// TestClipboardRouteReleasesAfterAFailedPaste is the point of the defer: a
-// chord that never went out must not leave Murrly owning the desktop's
-// clipboard, and the chain still has to hear that this route failed.
-func TestClipboardRouteReleasesAfterAFailedPaste(t *testing.T) {
+// A chord that never went out still has to be reported up the chain, so the
+// next route in the hybrid chain gets its turn. The text stays in the clipboard
+// either way: the user can paste it themselves, which is the whole fallback.
+func TestClipboardRouteReportsAFailedPaste(t *testing.T) {
 	lg := &callLog{}
 	cb := &fakeClipboard{log: lg}
 	pa := &fakePaster{log: lg, err: errors.New("no xdotool")}
 
 	if err := (&Clipboard{CB: cb, Paster: pa}).Insert("текст"); err == nil {
 		t.Fatal("Insert reported success after the paste failed")
-	}
-	if cb.releases != 1 {
-		t.Errorf("released %d times after a failed paste, want 1", cb.releases)
 	}
 }
 

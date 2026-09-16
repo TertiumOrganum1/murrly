@@ -1,9 +1,6 @@
 package inserter
 
-import (
-	"fmt"
-	"time"
-)
+import "fmt"
 
 // ClipboardBackend is the platform clipboard. Publish makes text the clipboard
 // content and returns the func that gives the clipboard back — on X11 that is
@@ -11,6 +8,9 @@ import (
 // elsewhere it is a no-op.
 type ClipboardBackend interface {
 	Publish(text string) (release func(), err error)
+	// PublishAndHold publishes without giving the selection back. See the
+	// comment on holdAfterPaste for why the insert route wants that.
+	PublishAndHold(text string) error
 }
 
 // PasterBackend synthesises the paste chord. beforeKey is called at the last
@@ -19,18 +19,20 @@ type PasterBackend interface {
 	Paste(beforeKey func()) error
 }
 
-// holdAfterPaste is how long the text stays in the clipboard after the chord
-// before we hand the clipboard back.
+// The selection is not handed back after the chord any more, which is what the
+// very first release did too (see a3b15f0: "xclip stays alive as the selection
+// owner until a later Set/Restore replaces it").
 //
-// It is the one number on this route, and it is a margin rather than a
-// measurement: applications that read the selection lazily (GTK dialogs,
-// terminals) do it within a few tens of milliseconds of the keystroke. What
-// used to be here instead — waiting for an observable fetch, adapting the
-// pre-chord delay to the machine, holding for three seconds when nothing read
-// anything — was built around Chromium/Electron, which never reads the
-// selection on Ctrl+V at all. No delay reaches an application that does not
-// look, so there is nothing to tune. Ctrl+Shift+F12 exists for those fields.
-const holdAfterPaste = 200 * time.Millisecond
+// Handing it back was never free. It is a second ownership change a fifth of a
+// second after the paste, and what picks the text up is the desktop's clipboard
+// manager — which anything arriving late then has to wait on. Our own owner
+// answers in 2 ms; the manager on this machine has twice been logged taking
+// over 400 ms. Holding also drops the 200 ms wait that used to sit at the end
+// of every insert purely to give a reader time before we killed the owner.
+//
+// What it costs: while the dictation is what is in the clipboard, a paste of it
+// is served by a child process of Murrly. That ends the moment anything else is
+// copied — the new owner takes the selection and our xclip exits by itself.
 
 // Clipboard delivers text by putting it in the clipboard and pressing the
 // paste chord.
@@ -51,14 +53,11 @@ func (c *Clipboard) Insert(text string) error {
 	if text == "" {
 		return nil
 	}
-	release, err := c.CB.Publish(text)
-	if err != nil {
-		return fmt.Errorf("clipboard.Publish: %w", err)
+	if err := c.CB.PublishAndHold(text); err != nil {
+		return fmt.Errorf("clipboard.PublishAndHold: %w", err)
 	}
-	defer release()
 	if err := c.Paster.Paste(func() {}); err != nil {
 		return fmt.Errorf("paster.Paste: %w", err)
 	}
-	time.Sleep(holdAfterPaste)
 	return nil
 }
