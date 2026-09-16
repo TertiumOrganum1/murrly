@@ -3,555 +3,235 @@
 package clipboard
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"os/exec"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// pasteTracker holds the verbose xclip owner spawned by the last Set so
-// WaitPasted can observe when the pasted text is actually fetched by the
-// target application. The darwin/windows clipboards have no observable
-// owner process; their pasteTracker is an empty struct.
-type pasteTracker struct {
-	mu sync.Mutex
-	// owner is the verbose xclip publishing the text from the last Set.
-	owner *xclipOwner
-	// armedAt is owner.served as of ArmPasteWait — the fetch count at the
-	// moment just before the paste keystroke. WaitPasted waits for the
-	// counter to move past it.
-	armedAt int64
-}
-
-// xclipOwner tracks one `xclip -i -verbose` selection owner. served counts
-// completed content transfers (xclip does not count TARGETS requests).
-// WaitPasted snapshots it on entry and waits for it to grow, so only
-// fetches that happen after the call — i.e. the target application's
-// paste — are detected; earlier fetches (Set's confirmation read, desktop
-// snoopers that burst-read on ownership change) are absorbed.
-type xclipOwner struct {
-	served atomic.Int64
-	// times records when each content transfer completed, so the insert
-	// path can report how long after the paste chord the application
-	// actually read the text — the only honest basis for choosing how long
-	// to hold the user's clipboard hostage.
-	mu    sync.Mutex
-	times []time.Time
-}
-
-// xclipReadTimeout caps every blocking xclip -o call. X11 selections are
-// served by the owning process, so a hung owner (dead screenshot tool,
-// stuck image paste, etc.) used to deadlock our whole insert flow — the
-// app goroutine sat in clipboard.Save waiting on xclip waiting on a
-// dead owner, and the tray icon was stuck on "transcribing" until the
-// user killed the orphan xclip processes by hand. Two seconds is more
-// than enough for any sane owner (even a 50 MB image round-trips in
-// under a second over the X socket); past that we give up and let the
-// dictation still get inserted with whatever clipboard state we have.
-const xclipReadTimeout = 2 * time.Second
-
-// xclipOutput runs `xclip args...` with a hard timeout and returns its
-// stdout. On timeout it logs once and returns context.DeadlineExceeded
-// (which callers translate into "no content, keep going" rather than a
-// fatal error).
-func xclipOutput(args ...string) ([]byte, error) {
-	return xclipOutputWithin(xclipReadTimeout, args...)
-}
-
-// xclipOutputWithin is xclipOutput under a caller-chosen budget. Used by
-// SaveWithin, where the snapshot is a courtesy rather than a requirement
-// and must never hold up the insert it precedes.
-func xclipOutputWithin(timeout time.Duration, args ...string) ([]byte, error) {
-	if timeout <= 0 {
-		return nil, context.DeadlineExceeded
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "xclip", args...).Output()
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		log.Printf("clipboard: xclip %v timed out after %v — likely a hung selection owner; ignoring", args, timeout)
-		return nil, context.DeadlineExceeded
-	}
-	return out, err
-}
-
-func (c *Clipboard) Save() (Saved, error) { return c.SaveWithin(xclipReadTimeout) }
-
-// SaveWithin is Save under a deadline the caller picks, spanning both xclip
-// calls (the TARGETS probe and the payload read) rather than each of them.
+// The X11 clipboard is not a store — it is a process. Whoever "copied" keeps
+// the bytes in its own memory and hands them over on request, so text exists
+// in the clipboard only for as long as some process owns the selection.
 //
-// It exists for the replacing insert route, which snapshots the clipboard
-// purely so the user can get it back from the menu afterwards. There the
-// read is optional: a selection owner that does not answer promptly must
-// cost the dictation nothing, so the budget runs out and the snapshot is
-// simply skipped. Save's own two seconds are the opposite trade — that path
-// has to put the clipboard back, so it is worth waiting for.
+// That is the whole design constraint here. Murrly used to own CLIPBOARD from
+// the first dictation until it exited, which meant every Ctrl+V anywhere on
+// the desktop was served by a child process of ours — and any hiccup of ours
+// became a hiccup of the whole desktop's clipboard.
 //
-// Images come along the same way they do in Save: a screenshot advertises
-// image/png, the bytes are read through that target and stashed verbatim,
-// and Restore re-publishes them.
-func (c *Clipboard) SaveWithin(budget time.Duration) (Saved, error) {
-	s := Saved{}
-	deadline := time.Now().Add(budget)
+// So ownership is now scoped to the paste that needs it. Publish hands back a
+// release func; the insert route presses the chord, waits out a short hold and
+// releases. Everything else the old implementation did — counting fetches via
+// `xclip -verbose`, polling to confirm ownership, snapshotting foreign binary
+// targets and republishing them, waiting for a read that Chromium never
+// performs — is gone. The user's previous clipboard is kept as plain text in
+// our own memory (see ReadText and Stash) instead of being round-tripped
+// through X, which is what used to degrade it to a single target.
 
-	targets, err := readTargets(time.Until(deadline), "clipboard")
-	if err != nil {
-		return s, fmt.Errorf("read clipboard targets: %w", err)
+// readTimeout caps the one read we make of somebody else's selection. The read
+// leaves the process and is answered by whatever owns the clipboard, so a hung
+// owner must cost the dictation nothing: the snapshot is a courtesy, and the
+// recording it runs alongside must not wait for it.
+const readTimeout = 400 * time.Millisecond
+
+// maxStashedImage caps what a snapshot will hold in RSS. A screenshot of a
+// region is a few hundred KB and a full 4K screen a few MB; past this we are
+// storing somebody's scanned document for the rest of the session, and the
+// point of the stash is undoing an accident, not archiving.
+const maxStashedImage = 32 << 20
+
+// imageTargets are the picture formats we will keep, best first. PNG is what
+// every screenshot tool on this desktop offers and it is lossless; the others
+// are there so a snapshot from an odd source is not dropped on the floor.
+var imageTargets = []string{"image/png", "image/webp", "image/jpeg", "image/bmp", "image/tiff"}
+
+// readSystemSnapshot is the X11 half of Snapshot (see clipboard.go, which
+// filters out our own dictations before the caller sees them).
+func (c *Clipboard) readSystemSnapshot() (Saved, bool) { return readSnapshotFrom("clipboard") }
+
+// readSnapshotFrom is readSystemSnapshot against a named selection. Split out
+// so the tests can exercise the real xclip round-trip on SECONDARY instead of
+// trampling the clipboard of whoever is running them.
+//
+// TARGETS comes first and is not an optimisation — it is the only way to know
+// what is in there. xclip hands back its payload for ANY target asked of it,
+// regardless of what the owner advertises: ask an image-only selection for
+// UTF8_STRING and you get PNG bytes back, rc=0, looking exactly like text.
+// Reading blind is how binary ends up stashed as a string. TARGETS costs 3-7 ms
+// against a live owner, which is nothing on a path nobody waits for.
+func readSnapshotFrom(selection string) (Saved, bool) {
+	targets := readTargets(selection)
+	if len(targets) == 0 {
+		return Saved{}, false
 	}
-	if len(targets) > 0 {
-		s.HasContent = true
-		// Pick a non-text MIME (image/png from screenshots, etc.) if
-		// the owner advertises one — Save the raw bytes so Restore can
-		// re-publish them. Falling through to xclip's default text
-		// output would corrupt binary data to UTF-8 mush, which is
-		// what was killing user screenshots after a dictation cycle.
-		if binTarget := pickBinaryTarget(targets); binTarget != "" {
-			data, err := xclipOutputWithin(time.Until(deadline), "-selection", "clipboard", "-t", binTarget, "-o")
-			if err != nil {
-				// Read failed (hung owner, etc.) — don't error out the
-				// whole insert; just give up on saving this clipboard so
-				// the dictation still gets pasted.
-				s.HasContent = false
-			} else {
-				s.Binary = data
-				s.Target = binTarget
-			}
-		} else {
-			out, err := xclipOutputWithin(time.Until(deadline), "-selection", "clipboard", "-o")
-			if err != nil {
-				s.HasContent = false
-			} else {
-				s.Text = string(out)
-			}
+	// Text wins when both are on offer: it is the thing that can actually go
+	// back into the clipboard, and a picture is only ever a file on disk.
+	for _, want := range textTargets {
+		if hasTarget(targets, want) {
+			return readTextFrom(selection)
 		}
 	}
-
-	// PRIMARY is deliberately not touched. Insertion only ever writes
-	// CLIPBOARD, so there was never anything of ours in PRIMARY to put back
-	// — saving and re-publishing it only took the mouse-selection away from
-	// whatever application owned it, once per dictation, and left our own
-	// xclip owning it afterwards. RestorePrimary is kept on the struct so
-	// existing configs still parse; it no longer does anything.
-	return s, nil
-}
-
-// Set makes `text` the sole content of the clipboard. Sole is load-bearing,
-// not incidental: the fresh xclip becomes the only selection owner and
-// advertises text targets only, so an image, a PDF or an application's
-// private atom that the previous owner published is gone with it — there is
-// no such thing as a leftover "image slot" alongside our text. That matters
-// beyond tidiness: a selection left advertising a broken or private-only
-// target is what hangs applications mid-paste (see pickBinaryTarget for the
-// time we did that to ourselves), so publishing over it is also the cure.
-// Windows clears every format via EmptyClipboard and macOS via clearContents
-// for the same reason.
-func (c *Clipboard) Set(text string) error {
-	owner, err := writeSelectionTracked("clipboard", text)
-	if err != nil {
-		return err
-	}
-	// xclip claims the selection asynchronously after Start(), so Set used
-	// to return before the clipboard actually served `text`. Under load the
-	// Ctrl+V that follows could then fire while the PREVIOUS owner was still
-	// serving — intermittently pasting the stale clipboard instead of the
-	// dictation. Block until the selection really serves `text` (ownership
-	// claimed) before returning.
-	confirmSelection("clipboard", text, clipboardClaimTimeout)
-	c.mu.Lock()
-	c.owner = owner
-	c.mu.Unlock()
-	return nil
-}
-
-// clipboardClaimTimeout bounds how long Set waits for xclip to take
-// ownership of the clipboard before giving up and letting the paste proceed
-// anyway (best effort — better than blocking the insert forever).
-const clipboardClaimTimeout = 1 * time.Second
-
-// confirmSelection polls the selection until it serves `want` (our xclip has
-// claimed ownership) or the timeout elapses. Cheap in the common case (the
-// claim lands within a few ms → one read); only spins under contention.
-func confirmSelection(sel, want string, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
-	for {
-		out, err := xclipOutput("-selection", sel, "-o")
-		if err == nil && string(out) == want {
-			return
-		}
-		if time.Now().After(deadline) {
-			log.Printf("clipboard: selection %q not confirmed within %v; pasting anyway", sel, timeout)
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-var requestNumberRe = regexp.MustCompile(`Waiting for selection request number (\d+)`)
-
-// parseRequestNumber extracts N from xclip -verbose's "Waiting for
-// selection request number N" stderr lines. ok=false for any other line.
-func parseRequestNumber(line string) (int, bool) {
-	m := requestNumberRe.FindStringSubmatch(line)
-	if m == nil {
-		return 0, false
-	}
-	n, err := strconv.Atoi(m[1])
-	if err != nil {
-		return 0, false
-	}
-	return n, true
-}
-
-// ArmPasteWait records the current fetch count as the baseline for the
-// paste that is about to happen. The paster calls it immediately before
-// pressing Ctrl+V — everything fetched before that point (Set's own
-// confirmation read, desktop clipboard snoopers that burst-read on every
-// ownership change) belongs to the past and must not be mistaken for the
-// paste. Arming after the keystroke instead is a race the fast apps win:
-// they fetch while Paste is still returning, the fetch lands inside the
-// baseline, and the wait below then times out on every single insert.
-func (c *Clipboard) ArmPasteWait() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.owner == nil {
-		return
-	}
-	c.armedAt = c.owner.served.Load()
-}
-
-// WaitPasted blocks until the text published by the last Set is fetched
-// at least once after ArmPasteWait — i.e. the target application actually
-// pasted it — or the timeout elapses. Returns true when the fetch was
-// observed.
-func (c *Clipboard) WaitPasted(timeout time.Duration) bool {
-	c.mu.Lock()
-	owner, base := c.owner, c.armedAt
-	c.mu.Unlock()
-	if owner == nil {
-		return false
-	}
-	deadline := time.Now().Add(timeout)
-	for {
-		if owner.served.Load() > base {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-}
-
-// writeSelectionTracked writes `text` into the X selection like
-// writeSelection, but runs xclip with -verbose (which also keeps it in
-// the foreground) and scans its stderr for "Waiting for selection request
-// number N" lines — xclip prints "number N+1" right after completing
-// content transfer N, which is how WaitPasted knows the target application
-// really fetched the dictation. The process still lives until a later
-// Set/Restore replaces it as selection owner (SelectionClear → xclip
-// exits → the scanner goroutine drains and reaps it).
-func writeSelectionTracked(sel, text string) (*xclipOwner, error) {
-	cmd := exec.Command("xclip", "-selection", sel, "-i", "-verbose")
-	cmd.Stdin = strings.NewReader(text)
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-	trackOwner(sel, cmd)
-	owner := &xclipOwner{}
-	go func() {
-		sc := bufio.NewScanner(stderr)
-		for sc.Scan() {
-			if n, ok := parseRequestNumber(sc.Text()); ok && n >= 1 {
-				owner.served.Store(int64(n - 1))
-				owner.mu.Lock()
-				owner.times = append(owner.times, time.Now())
-				owner.mu.Unlock()
-			}
-		}
-		_ = cmd.Wait()
-	}()
-	return owner, nil
-}
-
-// restoreAttempts is how many times Restore re-publishes the saved
-// clipboard when a verification read shows something else still owns it.
-// One retry covers the ordinary handoff race (a desktop clipboard manager
-// grabbing the selection as our dictation owner dies); beyond that we are
-// fighting a determined owner and should not spin.
-const restoreAttempts = 2
-
-// FetchTimes returns when the current publication was read, newest last.
-// Empty when nothing has read it (or nothing was published).
-func (c *Clipboard) FetchTimes() []time.Time {
-	c.mu.Lock()
-	owner := c.owner
-	c.mu.Unlock()
-	if owner == nil {
-		return nil
-	}
-	owner.mu.Lock()
-	defer owner.mu.Unlock()
-	return append([]time.Time(nil), owner.times...)
-}
-
-// ServesText reports whether the clipboard right now serves exactly this
-// text — that is, our own publication is still the live selection and
-// nobody claimed it back. Cheap: one read.
-func (c *Clipboard) ServesText(text string) bool {
-	out, err := xclipOutput("-selection", "clipboard", "-o")
-	return err == nil && string(out) == text
-}
-
-func (c *Clipboard) Restore(s Saved) error {
-	// The dictation owner is being replaced — drop it so a late WaitPasted
-	// can't attribute the new owner's fetches to a paste that is over.
-	c.mu.Lock()
-	c.owner = nil
-	c.mu.Unlock()
-
-	for attempt := 1; ; attempt++ {
-		switch {
-		case !s.HasContent:
-			_ = clearSelection("clipboard")
-		case s.Target != "" && len(s.Binary) > 0:
-			if err := writeSelectionBinary("clipboard", s.Target, s.Binary); err != nil {
-				return fmt.Errorf("restore clipboard %s: %w", s.Target, err)
-			}
-		default:
-			if err := writeSelection("clipboard", s.Text); err != nil {
-				return fmt.Errorf("restore clipboard: %w", err)
-			}
-		}
-		// Publishing a selection is a claim, not a guarantee: anyone can
-		// claim it right back. Read it back and re-publish once if the
-		// user's content did not actually land — losing the clipboard to
-		// a dictation is exactly what this whole dance exists to prevent.
-		if restoredOK(s) {
-			break
-		}
-		if attempt >= restoreAttempts {
-			log.Printf("clipboard: restored content did not stick after %d attempts; another owner is claiming the selection", attempt)
-			break
-		}
-	}
-	// No PRIMARY write here either — see Save. Publishing it left an xclip
-	// of ours owning the mouse selection for the rest of the session.
-	return nil
-}
-
-// readTargets returns the non-service MIME targets advertised by the
-// current selection owner, or an empty slice when the selection is
-// empty (xclip returns non-zero exit then — we treat that as "no
-// content" rather than an error).
-func readTargets(timeout time.Duration, sel string) ([]string, error) {
-	out, err := xclipOutputWithin(timeout, "-selection", sel, "-t", "TARGETS", "-o")
-	if err != nil {
-		return nil, nil
-	}
-	return parseTargets(string(out)), nil
-}
-
-// pickBinaryTarget returns a target name suitable for round-tripping
-// non-text payloads. Image types come first because that's the
-// screenshot-then-dictate case the user actually hit; anything other
-// than the standard text targets is acceptable as a fallback. Empty
-// string means "this clipboard is text — go through the text path".
-func pickBinaryTarget(targets []string) string {
-	priorities := []string{
-		"image/png", "image/jpeg", "image/jpg",
-		"image/bmp", "image/gif", "image/webp", "image/tiff",
-		"application/pdf",
-	}
-	for _, p := range priorities {
-		for _, t := range targets {
-			if t == p {
-				return t
-			}
-		}
-	}
-	// Any text target at all means this is a text clipboard: take the text
-	// path and let xclip negotiate the atom.
-	//
-	// Returning "the first non-text target" without this check is what froze
-	// the desktop. A Chromium copy advertises UTF8_STRING, STRING and
-	// text/plain — and, at the end of the list, its private
-	// chromium/x-internal-source-rfh-token. That atom is not text, so it won
-	// the loop below; Save stored those bytes and Restore re-published the
-	// user's clipboard as that atom ALONE. The selection then offered no text
-	// target whatsoever, so every application asking for text got nothing —
-	// and the tray menu, which queries the clipboard while holding a pointer
-	// and keyboard grab, blocked there with the grab still held, taking the
-	// whole desktop's input down with it.
-	//
-	// It also fed itself: the next Save saw the degraded list, picked the
-	// private atom again, and re-published it. The clipboard never recovered
-	// on its own.
-	for _, t := range targets {
-		if isTextTarget(t) {
-			return ""
-		}
-	}
-	for _, t := range targets {
-		if !isTextTarget(t) {
-			return t
-		}
-	}
-	return ""
-}
-
-func isTextTarget(t string) bool {
-	if strings.HasPrefix(t, "text/") {
-		return true
-	}
-	// TEXT belongs here too. Leaving it out was a real bug: an ordinary
-	// text clipboard advertising TEXT fell through to the "first non-text
-	// target" branch below, so Save stored it as binary with Target=TEXT
-	// and Restore re-published it as `xclip -t TEXT -i`. The selection then
-	// advertised only TARGETS and TEXT — GTK decodes a bare TEXT as
-	// COMPOUND_TEXT, which is where the Cyrillic mojibake came from. And it
-	// fed itself: the next Save saw the degraded target list and picked
-	// TEXT again.
-	return t == "STRING" || t == "UTF8_STRING" || t == "COMPOUND_TEXT" || t == "TEXT"
-}
-
-// writeSelection writes `text` into the X selection and detaches xclip into
-// the background. xclip stays alive as the selection owner (that is how X11
-// selections work — the owning process serves paste requests) until a later
-// Set/Restore replaces it. We must Start() rather than Run(): xclip does not
-// fork off, so Run() would block for the whole lifetime of the ownership.
-func writeSelection(sel, text string) error {
-	cmd := exec.Command("xclip", "-selection", sel, "-i")
-	cmd.Stdin = strings.NewReader(text)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	trackOwner(sel, cmd)
-	go cmd.Wait()
-	return nil
-}
-
-// Selection owners outlive the call that started them — that is the point,
-// an X11 selection is served by its owning process for as long as it holds
-// it. They must not outlive US, though: an xclip orphaned by our exit goes
-// on owning the desktop's clipboard, and every paste anyone makes is then
-// served by a process whose application is gone. Track the current owner per
-// selection so Release can hand it back at shutdown. Only the latest matters
-// — starting a new owner makes the X server take the selection off the old
-// one, which then exits on its own.
-var (
-	ownersMu sync.Mutex
-	owners   = map[string]*exec.Cmd{}
-)
-
-func trackOwner(sel string, cmd *exec.Cmd) {
-	ownersMu.Lock()
-	owners[sel] = cmd
-	ownersMu.Unlock()
-}
-
-// Release gives up every selection we own. Call it on the way out.
-func (c *Clipboard) Release() {
-	ownersMu.Lock()
-	held := owners
-	owners = map[string]*exec.Cmd{}
-	ownersMu.Unlock()
-	for sel, cmd := range held {
-		if cmd.Process == nil {
+	for _, want := range imageTargets {
+		if !hasTarget(targets, want) {
 			continue
 		}
-		// Kill unconditionally rather than checking ProcessState, which the
-		// Wait goroutine writes concurrently. Killing an already-exited
-		// process just errors, and that is fine.
-		if err := cmd.Process.Kill(); err == nil {
-			log.Printf("clipboard: released the %s selection on shutdown", sel)
+		out, ok := fetchTarget(selection, want)
+		if !ok || len(out) == 0 {
+			return Saved{}, false
+		}
+		if len(out) > maxStashedImage {
+			log.Printf("clipboard: the picture in the clipboard is %d MB; not keeping it", len(out)>>20)
+			return Saved{}, false
+		}
+		return Saved{HasContent: true, Image: out, ImageTarget: want}, true
+	}
+	return Saved{}, false
+}
+
+// readTargets asks the selection owner what formats it can produce. An owner
+// that does not answer in time leaves us with nothing, which is the correct
+// outcome: no snapshot beats a wrong one.
+func readTargets(selection string) []string {
+	out, ok := fetchTarget(selection, "TARGETS")
+	if !ok {
+		return nil
+	}
+	var targets []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			targets = append(targets, line)
 		}
 	}
+	return targets
 }
 
-// writeSelectionBinary mirrors writeSelection for arbitrary MIME types —
-// xclip's -t flag advertises the given target so paste requests for
-// that MIME are honoured. Same fork-and-detach pattern: xclip stays
-// alive holding the selection until a future Set/Restore replaces it.
-func writeSelectionBinary(sel, target string, data []byte) error {
-	cmd := exec.Command("xclip", "-selection", sel, "-t", target, "-i")
-	cmd.Stdin = bytes.NewReader(data)
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	trackOwner(sel, cmd)
-	go cmd.Wait()
-	return nil
-}
-
-// restoreSettleDelay is how long Restore lets the selection settle before
-// reading it back. A fresh xclip claims within a few ms; the rest of the
-// window is there to catch a competing owner (a clipboard manager
-// preserving the dying dictation owner's content) claiming it right back.
-// It costs nothing the user waits on — the text is already inserted by
-// the time Restore runs.
-const restoreSettleDelay = 150 * time.Millisecond
-
-// restoredOK reports whether the clipboard really serves the saved payload
-// once the dust has settled. Deliberately reads AFTER the delay rather than
-// returning on the first match: a claim landing a moment later is exactly
-// the case worth catching. Text is compared exactly; binary payloads are
-// checked by the advertised target only, since re-reading a multi-megabyte
-// image just to compare it would cost more than the whole insert.
-func restoredOK(s Saved) bool {
-	if !s.HasContent {
-		// Nothing to protect — an empty clipboard is the goal state.
-		return true
-	}
-	time.Sleep(restoreSettleDelay)
-	if s.Target != "" {
-		targets, _ := readTargets(xclipReadTimeout, "clipboard")
-		return containsTarget(targets, s.Target)
-	}
-	out, err := xclipOutput("-selection", "clipboard", "-o")
-	return err == nil && string(out) == s.Text
-}
-
-func containsTarget(targets []string, want string) bool {
+func hasTarget(targets []string, want string) bool {
 	for _, t := range targets {
-		if t == want {
+		if strings.EqualFold(t, want) {
 			return true
 		}
 	}
 	return false
 }
 
-func clearSelection(sel string) error {
-	return writeSelection(sel, "")
+// fetchTarget runs one conversion request under the read timeout.
+func fetchTarget(selection, target string) ([]byte, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), readTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "xclip", "-selection", selection, "-o", "-t", target).Output()
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			log.Printf("clipboard: the current owner did not answer %s within %v; not keeping a snapshot", target, readTimeout)
+		}
+		return nil, false
+	}
+	return out, true
 }
 
-// parseTargets filters service entries out of an xclip TARGETS list.
-func parseTargets(raw string) []string {
-	skip := map[string]bool{
-		"TARGETS":      true,
-		"TIMESTAMP":    true,
-		"MULTIPLE":     true,
-		"SAVE_TARGETS": true,
-	}
-	var out []string
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || skip[line] {
-			continue
+// textTargets are the plain-text flavours a selection owner may offer, best
+// first. Owners differ on which they advertise — GTK leads with UTF8_STRING,
+// older Qt with STRING, browsers with text/plain;charset=utf-8.
+var textTargets = []string{"UTF8_STRING", "text/plain;charset=utf-8", "text/plain", "STRING"}
+
+// readTextFrom reads the plain text of a selection. In practice this is one
+// fork: an owner that has text answers the first flavour asked. The loop is
+// for the owner that advertises only one of the older spellings.
+func readTextFrom(selection string) (Saved, bool) {
+	for _, target := range textTargets {
+		if out, ok := fetchTarget(selection, target); ok && len(out) > 0 {
+			return Saved{Text: string(out), HasContent: true}, true
 		}
-		out = append(out, line)
 	}
-	return out
+	return Saved{}, false
+}
+
+// Publish makes text the content of the clipboard and returns the func that
+// gives the clipboard back. The caller owns the selection for exactly as long
+// as it holds onto that func, which for the insert route is the paste chord
+// plus a short hold.
+//
+// -verbose is load-bearing, and not for its output: run silently, xclip forks
+// itself into the background and the parent exits immediately, so the process
+// we started is not the process that owns the selection and killing it
+// releases nothing. In verbose mode it stays in the foreground and stays
+// killable. Its chatter goes to /dev/null (a nil Stderr), so nothing has to be
+// drained — draining that pipe is what used to tie the liveness of the whole
+// desktop's clipboard to whether Murrly was keeping up.
+//
+// No ownership confirmation either: xclip claims within a couple of ms, and
+// polling for it cost a fork/exec every 20 ms.
+func (c *Clipboard) Publish(text string) (func(), error) {
+	release, err := publishTo("clipboard", text)
+	if err == nil {
+		markOurs(text)
+	}
+	return release, err
+}
+
+// publishTo is Publish against a named selection — see readTextFrom.
+func publishTo(selection, text string) (func(), error) {
+	cmd := exec.Command("xclip", "-selection", selection, "-verbose", "-i")
+	cmd.Stdin = strings.NewReader(text)
+	if err := cmd.Start(); err != nil {
+		return func() {}, err
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			// Killing an already-exited process just errors, which is fine —
+			// xclip exits on its own the moment another client claims the
+			// selection.
+			_ = cmd.Process.Kill()
+			go func() { _ = cmd.Wait() }()
+		})
+	}, nil
+}
+
+// Set puts text in the clipboard and leaves it there — for the tray items and
+// the paste-last binding, where the user explicitly asked for something to be
+// in the clipboard. Ownership is kept (it has to be: drop it and the text is
+// gone) but tracked, so Release can hand it back rather than orphan an xclip
+// that outlives us.
+func (c *Clipboard) Set(text string) error {
+	release, err := publishTo("clipboard", text)
+	if err != nil {
+		return err
+	}
+	// The user asked for this text to be in the clipboard, so it counts as
+	// theirs from now on — the next dictation may snapshot it.
+	forgetOurs()
+	ownersMu.Lock()
+	prev := owner
+	owner = release
+	ownersMu.Unlock()
+	// The previous holder loses the selection to the new one anyway; releasing
+	// it explicitly just reaps the process now instead of at exit.
+	if prev != nil {
+		prev()
+	}
+	return nil
+}
+
+// owner is the release func for the selection Set is currently holding, if
+// any. Only the latest matters: claiming the selection makes the X server take
+// it off the previous owner, which then exits on its own.
+var (
+	ownersMu sync.Mutex
+	owner    func()
+)
+
+// Release gives up the selection we hold from Set. Call it on the way out: an
+// xclip orphaned by our exit goes on owning the desktop's clipboard with no
+// application behind it.
+func (c *Clipboard) Release() {
+	ownersMu.Lock()
+	held := owner
+	owner = nil
+	ownersMu.Unlock()
+	if held != nil {
+		held()
+		log.Printf("clipboard: released the clipboard selection on shutdown")
+	}
 }

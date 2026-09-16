@@ -24,7 +24,7 @@ type Tray struct {
 	icons           map[State][]byte
 	stateCh         chan State
 	transcriptCh    chan []string
-	displacedCh     chan bool
+	displacedCh     chan displacedState
 	activeModelCh   chan int
 	activeScoringCh chan int
 	actions         *menuactions.Actions
@@ -35,7 +35,7 @@ func New(icons map[State][]byte, actions *menuactions.Actions) *Tray {
 		icons:           icons,
 		stateCh:         make(chan State, 8),
 		transcriptCh:    make(chan []string, 8),
-		displacedCh:     make(chan bool, 8),
+		displacedCh:     make(chan displacedState, 8),
 		activeModelCh:   make(chan int, 8),
 		activeScoringCh: make(chan int, 8),
 		actions:         actions,
@@ -68,15 +68,21 @@ func (t *Tray) SetRecentTranscripts(items []string) {
 	}
 }
 
-// SetDisplacedClipboard shows or hides the "previous clipboard" item. Called
-// once the replacing insert has actually displaced something, so a session
-// that never overwrote a clipboard never grows a row that would do nothing.
-func (t *Tray) SetDisplacedClipboard(has bool) {
+// SetDisplacedClipboard shows or hides the "previous clipboard" rows. Called
+// once a dictation has actually displaced something, so a session that never
+// overwrote a clipboard never grows a row that would do nothing.
+//
+// Text and picture are separate flags because they are separate rows with
+// separate endings — one pastes, the other writes a file.
+func (t *Tray) SetDisplacedClipboard(hasText, hasImage bool) {
 	select {
-	case t.displacedCh <- has:
+	case t.displacedCh <- displacedState{text: hasText, image: hasImage}:
 	default:
 	}
 }
+
+// displacedState is what the snapshot currently holds, as the menu needs it.
+type displacedState struct{ text, image bool }
 
 // SetActiveModel moves the checkmark in the Model submenu to the item at
 // the given index. Pass -1 to clear all checkmarks. Called from the
@@ -137,12 +143,31 @@ func (t *Tray) onReady() {
 	// in the replacing mode, where the dictation overwrites whatever was
 	// there — the content is snapshotted just before that happens and this
 	// puts it back. Hidden until there is a snapshot to offer.
-	displacedItem := systray.AddMenuItem("Вернуть прежний буфер обмена", "Положить обратно то, что лежало в буфере обмена до последней вставки, затершей его (текст или картинку)")
+	// Shouted rather than bolded: a tray menu label goes out over DBusMenu as
+	// plain text, and Cyrillic has no bold forms in Unicode the way Latin does
+	// (the mathematical alphanumerics stop at Greek), so caps and a glyph are
+	// the only weight available. This item is the undo for a clipboard the user
+	// did not mean to lose, so it has to be findable at a glance.
+	displacedItem := systray.AddMenuItem("↩  ВЕРНУТЬ ПРЕЖНИЙ БУФЕР ОБМЕНА", "Положить обратно текст, лежавший в буфере обмена перед последней диктовкой. Снимок делается в момент начала записи; форматирование не сохраняется")
 	displacedItem.Hide()
 	go func() {
 		for range displacedItem.ClickedCh {
 			if t.actions.OnRestoreDisplacedClipboard != nil {
 				t.actions.OnRestoreDisplacedClipboard()
+			}
+		}
+	}()
+
+	// A displaced PICTURE gets its own row, because it has a different ending:
+	// it goes to a file, never back into the clipboard. Showing one item that
+	// sometimes pastes and sometimes writes a file would be the same row doing
+	// two unrelated things.
+	displacedImageItem := systray.AddMenuItem("🖼  СОХРАНИТЬ КАРТИНКУ ИЗ БУФЕРА В ФАЙЛ", "Записать в файл картинку, лежавшую в буфере обмена перед последней диктовкой. Обратно в буфер она не кладётся: вернуть её туда можно только так, что любая вставка текста начнёт отдавать байты картинки")
+	displacedImageItem.Hide()
+	go func() {
+		for range displacedImageItem.ClickedCh {
+			if t.actions.OnSaveDisplacedImage != nil {
+				t.actions.OnSaveDisplacedImage()
 			}
 		}
 	}()
@@ -210,14 +235,7 @@ func (t *Tray) onReady() {
 	profanityItem := systray.AddMenuItemCheckbox("Фильтр лексики", "Маскировать обсценную лексику символом «•» при показе и вставке; оригинал хранится без цензуры", profanityChecked)
 
 	directChecked := t.actions.IsDirectInsert != nil && t.actions.IsDirectInsert()
-	directItem := systray.AddMenuItemCheckbox("Прямой ввод", "Вставлять текст прямо в поле (через шину доступности, иначе набором на клавиатуре), не трогая буфер обмена. Выключено — прежний способ: подменить буфер, нажать Ctrl+V, вернуть обратно. Прямой ввод не может потерять буфер, но длинную фразу набирает несколько секунд", directChecked)
-
-	clipReplaceChecked := t.actions.IsClipboardReplace != nil && t.actions.IsClipboardReplace()
-	clipReplaceItem := systray.AddMenuItemCheckbox("Затирать буфер обмена", "Только для вставки через буфер обмена. Выключено — прежний способ: запомнить буфер, вставить, вернуть исходное. Включено — распознанная фраза просто остаётся в буфере: ничего не ждём и не возвращаем, поэтому Chromium/Electron не подсовывают прошлое содержимое", clipReplaceChecked)
-	// Meaningless while the text goes straight into the field.
-	if directChecked {
-		clipReplaceItem.Disable()
-	}
+	directItem := systray.AddMenuItemCheckbox("Прямой ввод", "Вставлять текст прямо в поле (через шину доступности, иначе набором на клавиатуре), не трогая буфер обмена. Выключено — через буфер обмена: положить туда фразу, нажать Ctrl+V и сразу отпустить буфер. Прямой ввод не трогает буфер вовсе, но длинную фразу набирает несколько секунд", directChecked)
 
 	profanityRemoveChecked := t.actions.IsProfanityRemove != nil && t.actions.IsProfanityRemove()
 	profanityRemoveItem := systray.AddMenuItemCheckbox("Вырезать, а не маскировать", "Когда «Фильтр лексики» включён — вырезать обсценные слова целиком (с прилегающей пунктуацией), а не закрывать «•». Обратимо: оригинал хранится без цензуры", profanityRemoveChecked)
@@ -393,10 +411,15 @@ func (t *Tray) onReady() {
 				lastTranscripts = items
 				slots.render(items)
 			case has := <-t.displacedCh:
-				if has {
+				if has.text {
 					displacedItem.Show()
 				} else {
 					displacedItem.Hide()
+				}
+				if has.image {
+					displacedImageItem.Show()
+				} else {
+					displacedImageItem.Hide()
 				}
 			case idx := <-t.activeModelCh:
 				for i, item := range modelItems {
@@ -450,18 +473,8 @@ func (t *Tray) onReady() {
 				if t.actions.OnToggleDirectInsert != nil {
 					if t.actions.OnToggleDirectInsert() {
 						directItem.Check()
-						clipReplaceItem.Disable()
 					} else {
 						directItem.Uncheck()
-						clipReplaceItem.Enable()
-					}
-				}
-			case <-clipReplaceItem.ClickedCh:
-				if t.actions.OnToggleClipboardReplace != nil {
-					if t.actions.OnToggleClipboardReplace() {
-						clipReplaceItem.Check()
-					} else {
-						clipReplaceItem.Uncheck()
 					}
 				}
 			case <-profanityItem.ClickedCh:

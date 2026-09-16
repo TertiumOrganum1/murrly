@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
 
 	"github.com/tertiumorganum1/murrly/internal/a11ysetup"
 	"github.com/tertiumorganum1/murrly/internal/app"
@@ -233,7 +232,6 @@ func main() {
 	}
 
 	cb := clipboard.New()
-	cb.RestorePrimary = cfg.Output.RestorePrimary
 
 	icons := map[tray.State][]byte{
 		tray.StateIdle:         mustReadIcon("idle_44" + iconExt),
@@ -432,24 +430,33 @@ func main() {
 	}
 	t = tray.New(icons, actions)
 
-	pasteDelay := time.Duration(cfg.Output.PasteDelayMs) * time.Millisecond
-	// Where the clipboard the replacing insert overwrites goes, so the tray
-	// can hand it back. In memory only and one slot deep — see clipboard.Stash.
+	// Where the clipboard a dictation overwrites goes, so the tray can hand it
+	// back. In memory only and one slot deep — see clipboard.Stash.
 	displaced := &clipboard.Stash{}
-	buildRoutes := func(mode string) *inserter.Chain {
-		routes := inserter.ForMode(mode, cfg.Output.TypeDelayMs,
-			clipAdapter{cb}, paster.New(), pasteDelay, cfg.Output.ClipboardReplace)
-		routes.OnClipboardDisplaced(func(prev any) {
-			s, ok := prev.(clipboard.Saved)
-			if !ok || !s.HasContent {
+	// snapshotClipboard runs when the recording starts, not when the text is
+	// ready: the user is speaking, so a read of somebody else's selection costs
+	// nothing that anybody waits for, and the insert path stays free of it. In
+	// its own goroutine because a hung selection owner must not hold up the
+	// state machine, and best-effort because it is a courtesy — a failed
+	// snapshot simply leaves the previous one in place.
+	snapshotClipboard := func() {
+		go func() {
+			s, ok := cb.Snapshot()
+			if !ok {
 				return
 			}
 			displaced.Put(s)
 			if t != nil {
-				t.SetDisplacedClipboard(true)
+				t.SetDisplacedClipboard(s.HasText(), s.HasImage())
 			}
-		})
-		return routes
+			if s.HasImage() {
+				log.Printf("clipboard: kept the %s (%d KB) that was in the clipboard; the menu can write it to a file",
+					s.ImageTarget, len(s.Image)>>10)
+			}
+		}()
+	}
+	buildRoutes := func(mode string) *inserter.Chain {
+		return inserter.ForMode(mode, cfg.Output.TypeDelayMs, cb, paster.New())
 	}
 	insertRoutes := buildRoutes(cfg.Output.InsertMode)
 	log.Printf("insert: mode %q (routes: %s)", cfg.Output.InsertMode, insertRoutes.Name())
@@ -481,38 +488,17 @@ func main() {
 		return on
 	}
 
-	// Tray toggle: what the clipboard route does with the user's own
-	// clipboard. Rebuilds the chain so the choice applies to the next
-	// dictation without a restart, exactly like the toggle above.
-	actions.IsClipboardReplace = func() bool { return cfg.Output.ClipboardReplace }
-	actions.OnToggleClipboardReplace = func() bool {
-		on := !cfg.Output.ClipboardReplace
-		cfg.Output.ClipboardReplace = on
-		routes := buildRoutes(cfg.Output.InsertMode)
-		if a != nil {
-			a.SetInserter(routes)
-		}
-		if err := persistClipboardReplace(cfgPath, cfg, on); err != nil {
-			log.Printf("clipboard-replace persist: %v", err)
-		}
-		if on {
-			log.Printf("insert: clipboard mode — затирающий (буфер остаётся с диктовкой)")
-		} else {
-			log.Printf("insert: clipboard mode — сохраняющий (буфер возвращается)")
-		}
-		return on
-	}
-
-	// The safety net for the replacing mode: put back what the last insert
-	// overwrote. Peek rather than take — the snapshot stays available, since
-	// the user may restore it, copy something else by accident, and want it
-	// again.
+	// The safety net: put back the clipboard the last dictation overwrote.
+	// Peek rather than take — the snapshot stays available, since the user may
+	// restore it, copy something else by accident, and want it again.
 	actions.OnRestoreDisplacedClipboard = func() bool {
 		s, ok := displaced.Peek()
-		if !ok {
+		// Text only, and never an empty one: publishing "" is not a restore,
+		// it is wiping whatever the user has copied since.
+		if !ok || !s.HasText() {
 			return false
 		}
-		if err := cb.Restore(s); err != nil {
+		if err := cb.Set(s.Text); err != nil {
 			log.Printf("clipboard: could not put the previous content back: %v", err)
 			return false
 		}
@@ -520,17 +506,33 @@ func main() {
 		return true
 	}
 
+	// A displaced picture leaves as a file — see cmd/murrly/clipimage.go for
+	// why it must never go back into the clipboard.
+	actions.OnSaveDisplacedImage = func() (string, bool) {
+		s, ok := displaced.Peek()
+		if !ok || !s.HasImage() {
+			return "", false
+		}
+		path, err := saveClipboardImage(s)
+		if err != nil {
+			log.Printf("clipboard: could not save the displaced picture: %v", err)
+			desktopNotify("Murrly", "Не удалось сохранить картинку: "+err.Error())
+			return "", false
+		}
+		log.Printf("clipboard: displaced picture saved to %s", path)
+		desktopNotify("Murrly", "Картинка из буфера сохранена:\n"+path)
+		return path, true
+	}
+
 	// pasteLast backs Shift+F12: put the phrase recognised last on the
 	// clipboard and paste it at the caret.
 	//
-	// It deliberately skips everything the ordinary insert routes do. No
-	// Save, so a hung selection owner cannot stall it before it starts. No
-	// Restore, so the phrase simply stays in the clipboard — the user asked
-	// for it there, and nothing has to be timed against a paste we cannot
-	// observe. Set publishes it as the SOLE clipboard content on every
-	// platform, which also clears out whatever image, PDF or private format
-	// was sitting there; a clipboard left in that state is what hangs
-	// applications mid-paste, so this key doubles as the way out of one.
+	// Unlike a dictation it keeps the clipboard afterwards rather than handing
+	// it straight back: the user asked for the phrase to be there. Set
+	// publishes it as the SOLE clipboard content on every platform, which also
+	// clears out whatever image, PDF or private format was sitting there; a
+	// clipboard left in that state is what hangs applications mid-paste, so
+	// this key doubles as the way out of one.
 	//
 	// The phrase is the same one the top tray item copies — history index 0,
 	// which the picker also updates, so "last recognised" means the variant
@@ -563,15 +565,13 @@ func main() {
 	}
 
 	appCfg := app.Config{
-		Recorder:    recorder.New(),
-		Transcriber: loader,
-		Clipboard:   clipAdapter{cb},
-		Paster:      paster.New(),
-		Inserter:    insertRoutes,
-		PasteLast:   pasteLast,
-		PasteDelay:  pasteDelay,
-		PadSilence:  cfg.Whisper.PadSilence,
-		Notify:      desktopNotify,
+		Recorder:      recorder.New(),
+		Transcriber:   loader,
+		Inserter:      insertRoutes,
+		PasteLast:     pasteLast,
+		OnRecordStart: snapshotClipboard,
+		PadSilence:    cfg.Whisper.PadSilence,
+		Notify:        desktopNotify,
 		OnState: func(s app.State) {
 			t.SetState(toTrayState(s))
 			switch s {
@@ -671,6 +671,10 @@ func main() {
 			case hotkey.EventDown:
 				events <- app.EventKeyDown
 			case hotkey.EventUp:
+				// Stamp the release before queueing the event: the paste
+				// chord's guard against the still-rising key is measured
+				// from here, and transcription eats it whole.
+				paster.NoteKeyUp()
 				events <- app.EventKeyUp
 			}
 		}
@@ -714,6 +718,7 @@ func main() {
 				case hotkey.EventDown:
 					events <- app.EventKeyDownForceMid
 				case hotkey.EventUp:
+					paster.NoteKeyUp()
 					events <- app.EventKeyUpForceMid
 				}
 			}
@@ -737,6 +742,7 @@ func main() {
 					case hotkey.EventDown:
 						events <- app.EventKeyDownForceMid
 					case hotkey.EventUp:
+						paster.NoteKeyUp()
 						events <- app.EventKeyUpForceMid
 					}
 				}
@@ -985,38 +991,6 @@ func mustReadIcon(name string) []byte {
 	return b
 }
 
-// clipAdapter bridges *clipboard.Clipboard to app.Clipboard (any-typed Restore).
-type clipAdapter struct{ *clipboard.Clipboard }
-
-func (a clipAdapter) Save() (any, error) {
-	s, err := a.Clipboard.Save()
-	return s, err
-}
-
-// SaveWithin is the bounded snapshot the replacing insert takes of the
-// clipboard it is about to overwrite (inserter.snapshotBackend).
-func (a clipAdapter) SaveWithin(budget time.Duration) (any, error) {
-	s, err := a.Clipboard.SaveWithin(budget)
-	return s, err
-}
-
-// ServesText forwards the ownership re-check used right before the paste
-// chord (the embedded *clipboard.Clipboard implements it on Linux only).
-func (a clipAdapter) ServesText(text string) bool {
-	type confirmer interface{ ServesText(string) bool }
-	if c, ok := any(a.Clipboard).(confirmer); ok {
-		return c.ServesText(text)
-	}
-	return true // no way to check — assume we still own it
-}
-
-func (a clipAdapter) Restore(saved any) error {
-	s, ok := saved.(clipboard.Saved)
-	if !ok {
-		return nil
-	}
-	return a.Clipboard.Restore(s)
-}
 
 // multiAdapter bridges *multiinfer.Runner to app.MultiTranscriber,
 // translating multiinfer.Candidate into app.Variant.

@@ -96,6 +96,12 @@ type WhisperConfig struct {
 }
 
 type OutputConfig struct {
+	// Deprecated, parsed only so an existing config.toml still loads and
+	// round-trips: the clipboard route no longer saves or restores anything.
+	// It publishes the dictation, presses the chord, and hands the clipboard
+	// straight back, so there is no restore to time against and no primary
+	// selection to put back. What the dictation overwrote is snapshotted into
+	// memory when the recording starts and offered from the tray.
 	PasteDelayMs   int  `toml:"paste_delay_ms"`
 	RestorePrimary bool `toml:"restore_primary"`
 	// ProfanityFilter — when true, Russian obscene words (мат) are masked
@@ -108,47 +114,37 @@ type OutputConfig struct {
 	// are cut out entirely (with their clinging punctuation) instead of being
 	// masked with bullets. On by default; tray "Вырезать, а не маскировать".
 	ProfanityRemove bool `toml:"profanity_remove"`
-	// ContextInsert — when true (default), the inserted text is adapted
-	// to the cursor's surroundings in the focused field (capitalisation,
-	// leading space, terminal punctuation), read via AT-SPI on Linux /
-	// the AX API on macOS. Power-user kill switch: set false if some
-	// app's accessibility tree misleads the transform.
+	// ContextInsert — when true, the inserted text is adapted to the
+	// cursor's surroundings in the focused field (capitalisation, leading
+	// space, terminal punctuation), read via AT-SPI on Linux / the AX API
+	// on macOS.
+	//
+	// Off by default: reading the tree is a synchronous, blocking step in
+	// front of every insert (capped at 1500 ms), it answers "unreadable"
+	// for a large share of windows, and it only pays off where the app
+	// keeps an accessibility tree running — which Electron apps do only
+	// once forced into permanent screen-reader mode, at a standing cost to
+	// the whole editor. Ctrl+Shift+F12 applies the same mid-sentence
+	// transform with no reading at all, which covers the common case.
 	ContextInsert bool `toml:"context_insert"`
 	// RecentTranscripts — how many of the latest recognized phrases the tray
 	// menu keeps as clickable copy slots. Default 20; clamped to [1,50] on
 	// load. Applies on all platforms.
 	RecentTranscripts int `toml:"recent_transcripts"`
 	// InsertMode picks HOW the recognized text reaches the focused field.
-	// The clipboard route (save → set → Ctrl+V → restore) is inherently
-	// racy: applications like Chromium/Electron cache the selection when
-	// ownership changes and paste from that cache, so the moment they
-	// really read it cannot be observed from outside — which showed up as
-	// the old clipboard being pasted instead of the dictation, or the
-	// dictation displacing the user's clipboard. The direct routes below
-	// never touch the clipboard at all.
+	// The clipboard route leaves the dictation in the clipboard; the direct
+	// routes below do not touch it at all, at the cost of needing an
+	// accessible field or typing the phrase out character by character.
 	//
 	//	hybrid    — AT-SPI, then typing, then clipboard (default)
 	//	atspi     — insert straight into the focused accessible field
 	//	type      — synthesise the characters on the keyboard
-	//	clipboard — the legacy paste route
+	//	clipboard — publish, Ctrl+V, release
 	//
 	// Unknown / missing values normalise to hybrid on load.
 	InsertMode string `toml:"insert_mode"`
-	// ClipboardReplace picks which of the two clipboard behaviours the paste
-	// route uses. Only meaningful while the text actually goes through the
-	// clipboard (insert_mode = clipboard, or the tail of hybrid).
-	//
-	//	false (default) — сохраняющий: remember the clipboard, put the
-	//	                  dictation in, press Ctrl+V, put the old content
-	//	                  back. Honest in applications that really ask the
-	//	                  selection owner (GTK fields, terminals, Qt).
-	//	true            — затирающий: put the dictation in, press Ctrl+V,
-	//	                  leave it there. For Chromium/Electron, which paste
-	//	                  from their own cache — there the restore is what
-	//	                  delivers the OLD clipboard, and the wait for a read
-	//	                  that never comes is what stalls the insert.
-	//
-	// Flipped at runtime from the tray and persisted here.
+	// Deprecated, parsed only so an existing config.toml still loads: there
+	// is one clipboard behaviour now, the replacing one. See PasteDelayMs.
 	ClipboardReplace bool `toml:"clipboard_replace"`
 	// TypeDelayMs is the per-keystroke delay for the typing route. Small
 	// values are fast but some applications drop characters when fed
@@ -207,11 +203,7 @@ func defaults() Config {
 			InitialPrompt:       "Мы обсуждаем программирование и архитектуру: React, TypeScript, Docker, Kubernetes, microservices, middleware, observability.",
 			PreferredGPU:        "weakest", // gpucheck.WeakestName — leave the faster card free for other GPU work
 		},
-		// PasteDelayMs sits between Set-clipboard / Cmd-V and the Restore-clipboard
-		// step. Too short and the focused app reads the restored (old) clipboard
-		// mid-paste, garbling output. 250ms is safe on M1 macOS; Linux/xclip
-		// tolerates lower values.
-		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ProfanityRemove: true, ContextInsert: true, RecentTranscripts: 20,
+		Output: OutputConfig{PasteDelayMs: 250, RestorePrimary: true, ProfanityFilter: true, ProfanityRemove: true, ContextInsert: false, RecentTranscripts: 20,
 			InsertMode: InsertClipboard, TypeDelayMs: defaultTypeDelayMs},
 	}
 }

@@ -40,49 +40,6 @@ func (t *fakeTranscriber) Transcribe(_ []float32) (string, error) {
 	return t.output, nil
 }
 
-type savedSnapshot struct{ text string }
-
-type fakeClipboard struct {
-	mu       sync.Mutex
-	saved    savedSnapshot
-	wasSaved bool
-	pasted   string
-	restored bool
-}
-
-func (c *fakeClipboard) Save() (any, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.wasSaved = true
-	return c.saved, nil
-}
-
-func (c *fakeClipboard) Set(text string) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.pasted = text
-	return nil
-}
-
-func (c *fakeClipboard) Restore(_ any) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.restored = true
-	return nil
-}
-
-type fakePaster struct {
-	mu     sync.Mutex
-	pasted bool
-}
-
-func (p *fakePaster) Paste(_ func()) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.pasted = true
-	return nil
-}
-
 type recordedStates struct {
 	mu     sync.Mutex
 	states []State
@@ -113,8 +70,6 @@ func (r *recordedStates) Contains(s State) bool {
 
 func waitUntilIdle(t *testing.T, st *recordedStates) {
 	t.Helper()
-	// Generous: the default clipboard route deliberately holds the text in
-	// the clipboard for most of a second so caching applications can read it.
 	deadline := time.Now().Add(4 * time.Second)
 	for time.Now().Before(deadline) {
 		snap := st.Snapshot()
@@ -129,19 +84,18 @@ func waitUntilIdle(t *testing.T, st *recordedStates) {
 func TestHappyPath(t *testing.T) {
 	rec := &fakeRecorder{pcm: []float32{0.1, 0.2, 0.3}}
 	tr := &fakeTranscriber{output: "hello world"}
-	cb := &fakeClipboard{}
-	pa := &fakePaster{}
+	ins := &recordingInserter{}
 	st := &recordedStates{}
 	var transcripts []string
+	recordStarts := 0
 
 	a := New(Config{
-		Recorder:     rec,
-		Transcriber:  tr,
-		Clipboard:    cb,
-		Paster:       pa,
-		OnState:      st.Set,
-		OnTranscript: func(text string) { transcripts = append(transcripts, text) },
-		PasteDelay:   10 * time.Millisecond,
+		Recorder:      rec,
+		Transcriber:   tr,
+		Inserter:      ins,
+		OnRecordStart: func() { recordStarts++ },
+		OnState:       st.Set,
+		OnTranscript:  func(text string) { transcripts = append(transcripts, text) },
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -158,14 +112,13 @@ func TestHappyPath(t *testing.T) {
 	if !tr.called {
 		t.Error("transcriber not called")
 	}
-	if cb.pasted != "hello world" {
-		t.Errorf("clipboard text: got %q, want %q", cb.pasted, "hello world")
+	if got := ins.texts(); len(got) != 1 || got[0] != "hello world" {
+		t.Errorf("inserted %v, want [hello world]", got)
 	}
-	if !pa.pasted {
-		t.Error("paste not invoked")
-	}
-	if !cb.restored {
-		t.Error("clipboard not restored")
+	// The clipboard snapshot is taken when the recording starts, not on the
+	// insert path — that is the whole point of the hook.
+	if recordStarts != 1 {
+		t.Errorf("OnRecordStart fired %d times, want 1", recordStarts)
 	}
 	if len(transcripts) != 1 || transcripts[0] != "hello world" {
 		t.Fatalf("transcripts = %v", transcripts)
@@ -181,19 +134,16 @@ func TestHappyPath(t *testing.T) {
 func TestEmptyTranscriptionSkipsPaste(t *testing.T) {
 	rec := &fakeRecorder{pcm: []float32{0.1}}
 	tr := &fakeTranscriber{output: ""}
-	cb := &fakeClipboard{}
-	pa := &fakePaster{}
+	ins := &recordingInserter{}
 	st := &recordedStates{}
 	calledTranscript := false
 
 	a := New(Config{
 		Recorder:     rec,
 		Transcriber:  tr,
-		Clipboard:    cb,
-		Paster:       pa,
+		Inserter:     ins,
 		OnState:      st.Set,
 		OnTranscript: func(string) { calledTranscript = true },
-		PasteDelay:   10 * time.Millisecond,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -207,11 +157,8 @@ func TestEmptyTranscriptionSkipsPaste(t *testing.T) {
 	events <- EventKeyUp
 	waitUntilIdle(t, st)
 
-	if cb.wasSaved {
-		t.Error("clipboard.Save should not be called when text is empty")
-	}
-	if pa.pasted {
-		t.Error("paste should not happen when text is empty")
+	if ins.count() != 0 {
+		t.Error("insert should not happen when text is empty")
 	}
 	if calledTranscript {
 		t.Error("OnTranscript should not be called when text is empty")
@@ -221,17 +168,14 @@ func TestEmptyTranscriptionSkipsPaste(t *testing.T) {
 func TestEmptyRecordingSkipsTranscriptionAndPaste(t *testing.T) {
 	rec := &fakeRecorder{}
 	tr := &fakeTranscriber{output: "should not be used"}
-	cb := &fakeClipboard{}
-	pa := &fakePaster{}
+	ins := &recordingInserter{}
 	st := &recordedStates{}
 
 	a := New(Config{
 		Recorder:    rec,
 		Transcriber: tr,
-		Clipboard:   cb,
-		Paster:      pa,
+		Inserter:    ins,
 		OnState:     st.Set,
-		PasteDelay:  10 * time.Millisecond,
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -248,11 +192,8 @@ func TestEmptyRecordingSkipsTranscriptionAndPaste(t *testing.T) {
 	if tr.called {
 		t.Error("transcriber should not be called when recording is empty")
 	}
-	if cb.wasSaved {
-		t.Error("clipboard.Save should not be called when recording is empty")
-	}
-	if pa.pasted {
-		t.Error("paste should not happen when recording is empty")
+	if ins.count() != 0 {
+		t.Error("insert should not happen when recording is empty")
 	}
 }
 
@@ -267,6 +208,12 @@ func (r *recordingInserter) Insert(text string) error {
 	defer r.mu.Unlock()
 	r.got = append(r.got, text)
 	return nil
+}
+
+func (r *recordingInserter) texts() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.got...)
 }
 
 func (r *recordingInserter) count() int {
@@ -286,7 +233,6 @@ func TestSetInserterSwapsTheRouteAtRuntime(t *testing.T) {
 		Recorder:    &fakeRecorder{pcm: []float32{0.1}},
 		Transcriber: &fakeTranscriber{output: "фраза"},
 		Inserter:    before,
-		PasteDelay:  time.Millisecond,
 	})
 
 	if err := a.insertText("первая"); err != nil {

@@ -92,7 +92,7 @@ func TestForModeBuildsTheConfiguredChain(t *testing.T) {
 		{"nonsense", "atspi→typing→clipboard"},
 	}
 	for _, c := range cases {
-		got := ForMode(c.mode, 4, &fakeClipboard{log: &callLog{}}, &fakePaster{log: &callLog{}}, 0, false).Name()
+		got := ForMode(c.mode, 4, &fakeClipboard{log: &callLog{}}, &fakePaster{log: &callLog{}}).Name()
 		if got != c.want {
 			t.Errorf("ForMode(%q) chain = %q, want %q", c.mode, got, c.want)
 		}
@@ -103,7 +103,7 @@ func TestForModeBuildsTheConfiguredChain(t *testing.T) {
 // on a build or config with no clipboard wired: a nil route would panic
 // mid-dictation instead of falling through.
 func TestForModeWithoutAClipboardBackendSkipsThatRoute(t *testing.T) {
-	if got := ForMode("hybrid", 4, nil, nil, 0, false).Name(); got != "atspi→typing" {
+	if got := ForMode("hybrid", 4, nil, nil).Name(); got != "atspi→typing" {
 		t.Errorf("chain without clipboard backend = %q, want %q", got, "atspi→typing")
 	}
 }
@@ -133,7 +133,7 @@ func TestChainSettlesOnceBeforeTheFirstRoute(t *testing.T) {
 }
 
 func TestForModeSetsTheKeyReleaseSettle(t *testing.T) {
-	if got := ForMode("hybrid", 4, nil, nil, 0, false).Settle; got <= 0 {
+	if got := ForMode("hybrid", 4, nil, nil).Settle; got <= 0 {
 		t.Errorf("ForMode chain Settle = %v, want the key-release delay", got)
 	}
 }

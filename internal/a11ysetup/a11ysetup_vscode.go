@@ -1,11 +1,17 @@
-// Shared (platform-agnostic) helpers for forcing VS Code's
-// editor.accessibilitySupport on. Chromium/Electron keeps its accessibility
-// tree off until it believes a screen reader is present, and this per-app
-// setting is the supported way to force it — needed for context-aware
-// insertion to read VS Code (and other Electron) fields on every OS. The
-// per-platform files supply the settings.json location; the patching itself
-// is identical everywhere (the file is JSONC, so we splice rather than
-// parse/re-marshal, preserving comments and trailing commas).
+// Helpers for forcing VS Code's editor.accessibilitySupport on.
+// Chromium/Electron keeps its accessibility tree off until it believes a
+// screen reader is present, and this per-app setting is the supported way to
+// force it, so context-aware insertion can read VS Code fields.
+//
+// ONLY Windows still calls this (see a11ysetup_windows.go). On Linux the
+// setting is deliberately left alone — see the package doc in
+// a11ysetup_linux.go — and it is not cost-free anywhere: "on" is permanent
+// screen-reader mode in Monaco (a shadow DOM copy of the text, virtualisation
+// partly disabled), a standing tax on the editor that outlives Murrly. Turn
+// it back off by hand in settings.json if an old Murrly left it on.
+//
+// The file is JSONC, so we splice rather than parse/re-marshal, preserving
+// comments and trailing commas.
 package a11ysetup
 
 import (

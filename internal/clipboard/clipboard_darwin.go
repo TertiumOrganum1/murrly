@@ -12,58 +12,58 @@ import "C"
 
 import (
 	"fmt"
-	"time"
+	"os/exec"
 	"unsafe"
 )
 
-// pasteTracker is empty on macOS: NSPasteboard is a one-shot copy with no
-// observable owner process, so there is no WaitPasted here.
-type pasteTracker struct{}
-
-// Save snapshots the entire NSPasteboard via the native API. Every type
-// of every item (text, image, RTF, file URLs, …) is captured into an
-// opaque token carried through Restore — so a copied screenshot survives
-// a transcription paste exactly as it was.
+// readSystemSnapshot is the macOS half of Snapshot (see clipboard.go, which
+// filters out our own dictations before the caller sees them). Shells out to
+// pbpaste rather than growing the native shim: it is one read, on the
+// recording path where nothing waits for it, and a failure simply means no
+// snapshot.
 //
-// macOS has no separate "primary" selection — Primary / HasPrimary stay
-// zero.
-// SaveWithin ignores the budget: NSPasteboard is read out of the process's
-// own address space, so there is no selection owner to hang on and nothing
-// for a deadline to protect against. Present so callers need not care which
-// platform they are on.
-func (c *Clipboard) SaveWithin(time.Duration) (Saved, error) { return c.Save() }
-
-func (c *Clipboard) Save() (Saved, error) {
-	token := C.mur_clip_save_state()
-	if token == nil {
-		return Saved{}, nil
+// Text only here. Keeping a picture is a Linux answer to a Linux problem —
+// there a dictation destroys the clipboard's image because our xclip takes the
+// selection away from whoever held it, while NSPasteboard is a store and the
+// image survives the write of a new item.
+func (c *Clipboard) readSystemSnapshot() (Saved, bool) {
+	out, err := exec.Command("pbpaste").Output()
+	if err != nil || len(out) == 0 {
+		return Saved{}, false
 	}
-	return Saved{
-		HasContent:    true,
-		platformState: uintptr(token),
-	}, nil
+	return Saved{Text: string(out), HasContent: true}, true
 }
 
-// Set replaces the pasteboard with a single UTF-8 plain text item.
-// Atomic — no torn intermediate state visible to other apps.
+// Publish writes the text and hands back a no-op release: NSPasteboard is a
+// server-side store, so nothing of ours keeps owning it afterwards. The
+// release func exists for the X11 implementation's sake (see
+// clipboard_linux.go).
+func (c *Clipboard) Publish(text string) (func(), error) {
+	if err := c.writeText(text); err != nil {
+		return func() {}, err
+	}
+	markOurs(text)
+	return func() {}, nil
+}
+
+// Set replaces the pasteboard with a single UTF-8 plain text item at the
+// user's request, so the text counts as theirs — see forgetOurs.
 func (c *Clipboard) Set(text string) error {
+	if err := c.writeText(text); err != nil {
+		return err
+	}
+	forgetOurs()
+	return nil
+}
+
+// writeText is the raw pasteboard write shared by Publish and Set.
+// Atomic — no torn intermediate state visible to other apps.
+func (c *Clipboard) writeText(text string) error {
 	ctext := C.CString(text)
 	defer C.free(unsafe.Pointer(ctext))
 	if rc := C.mur_clip_write_text(ctext); rc != 0 {
 		return fmt.Errorf("clipboard: NSPasteboard write failed (rc=%d)", int(rc))
 	}
-	return nil
-}
-
-// Restore reinstates the pasteboard from a Save() snapshot. Consumes
-// (frees) the platform-state token. If the snapshot was empty, the
-// pasteboard is cleared. RestorePrimary is a no-op on macOS.
-func (c *Clipboard) Restore(s Saved) error {
-	if s.platformState == 0 {
-		C.mur_clip_restore_state(nil)
-		return nil
-	}
-	C.mur_clip_restore_state(unsafe.Pointer(s.platformState))
 	return nil
 }
 

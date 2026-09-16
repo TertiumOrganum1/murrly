@@ -4,7 +4,6 @@ package clipboard
 
 import (
 	"fmt"
-	"log"
 	"time"
 	"unsafe"
 
@@ -13,25 +12,14 @@ import (
 
 // Windows clipboard model: a single global clipboard (no X11-style primary
 // selection), accessed through Open/Close with the calling thread holding it
-// for the duration. Save snapshots the most-useful current payload — an image
-// (CF_DIB) if one is present (the screenshot-then-dictate case), otherwise
-// Unicode text — so it survives the Set→Ctrl+V→Restore dictation cycle. Other
-// formats (files, RTF) aren't round-tripped; HasContent stays false for them
-// and Restore clears, matching the Linux "best effort, keep dictating" stance.
-
-// pasteTracker is empty on Windows: the clipboard is a one-shot copy with
-// no observable owner process, so there is no WaitPasted here.
-type pasteTracker struct{}
+// for the duration. There is no owning process to serve pastes, so unlike X11
+// nothing of ours stays alive after a write — see clipboard_linux.go for the
+// side of this package where that matters.
 
 const (
 	cfUnicodeText = 13
-	cfDIB         = 8
 
 	gmemMoveable = 0x0002
-
-	// dibTarget marks a Saved snapshot as a device-independent bitmap so
-	// Restore re-publishes it under CF_DIB rather than as text.
-	dibTarget = "CF_DIB"
 )
 
 var (
@@ -118,37 +106,52 @@ func writeFormat(format uintptr, data []byte) error {
 	return nil
 }
 
-// SaveWithin ignores the budget: the Win32 clipboard is a shared buffer read
-// directly, with no owning process to wait on. Present so callers need not
-// care which platform they are on.
-func (c *Clipboard) SaveWithin(time.Duration) (Saved, error) { return c.Save() }
-
-func (c *Clipboard) Save() (Saved, error) {
+// readSystemSnapshot is the Win32 half of Snapshot (see clipboard.go, which
+// filters out our own dictations before the caller sees them).
+//
+// Text only here. Keeping a picture is a Linux answer to a Linux problem —
+// there a dictation destroys the clipboard's image because our xclip takes the
+// selection away from whoever held it, while the Win32 clipboard is a store
+// and CF_BITMAP survives alongside our text write.
+func (c *Clipboard) readSystemSnapshot() (Saved, bool) {
 	if !openClipboard() {
-		log.Printf("clipboard: could not open for save; skipping snapshot")
-		return Saved{}, nil
+		return Saved{}, false
 	}
 	defer closeClipboard()
-
-	// Prefer the image: a copied screenshot is the payload most worth
-	// preserving across a dictation paste.
-	if isFormatAvailable(cfDIB) {
-		if data := readFormat(cfDIB); len(data) > 0 {
-			return Saved{HasContent: true, Binary: data, Target: dibTarget}, nil
-		}
+	if !isFormatAvailable(cfUnicodeText) {
+		return Saved{}, false
 	}
-	if isFormatAvailable(cfUnicodeText) {
-		if data := readFormat(cfUnicodeText); len(data) > 0 {
-			u16 := unsafe.Slice((*uint16)(unsafe.Pointer(&data[0])), len(data)/2)
-			return Saved{HasContent: true, Text: windows.UTF16ToString(u16)}, nil
-		}
+	data := readFormat(cfUnicodeText)
+	if len(data) == 0 {
+		return Saved{}, false
 	}
-	// Some other (unhandled) format, or empty clipboard. HasContent stays
-	// false so Restore clears rather than re-publishing garbage.
-	return Saved{}, nil
+	u16 := unsafe.Slice((*uint16)(unsafe.Pointer(&data[0])), len(data)/2)
+	return Saved{HasContent: true, Text: windows.UTF16ToString(u16)}, true
 }
 
+// Publish writes the text and hands back a no-op release: the Win32 clipboard
+// is a system-owned store. The release func exists for the X11
+// implementation's sake (see clipboard_linux.go).
+func (c *Clipboard) Publish(text string) (func(), error) {
+	if err := c.writeText(text); err != nil {
+		return func() {}, err
+	}
+	markOurs(text)
+	return func() {}, nil
+}
+
+// Set writes text at the user's request, so it counts as theirs from then on
+// — see forgetOurs.
 func (c *Clipboard) Set(text string) error {
+	if err := c.writeText(text); err != nil {
+		return err
+	}
+	forgetOurs()
+	return nil
+}
+
+// writeText is the raw clipboard write shared by Publish and Set.
+func (c *Clipboard) writeText(text string) error {
 	if !openClipboard() {
 		return fmt.Errorf("clipboard: could not open to set text")
 	}
@@ -159,28 +162,6 @@ func (c *Clipboard) Set(text string) error {
 		return err
 	}
 	return writeFormat(cfUnicodeText, unsafe.Slice((*byte)(unsafe.Pointer(&u16[0])), len(u16)*2))
-}
-
-func (c *Clipboard) Restore(s Saved) error {
-	if !openClipboard() {
-		return fmt.Errorf("clipboard: could not open to restore")
-	}
-	defer closeClipboard()
-	procEmptyClipboard.Call()
-
-	switch {
-	case !s.HasContent:
-		// Already emptied above — nothing to put back.
-		return nil
-	case s.Target == dibTarget && len(s.Binary) > 0:
-		return writeFormat(cfDIB, s.Binary)
-	default:
-		u16, err := windows.UTF16FromString(s.Text)
-		if err != nil {
-			return err
-		}
-		return writeFormat(cfUnicodeText, unsafe.Slice((*byte)(unsafe.Pointer(&u16[0])), len(u16)*2))
-	}
 }
 
 // Release is a no-op on Windows: the clipboard is a system-owned store and

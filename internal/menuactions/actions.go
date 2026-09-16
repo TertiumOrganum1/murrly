@@ -103,28 +103,21 @@ type Actions struct {
 	IsDirectInsert       func() bool
 	OnToggleDirectInsert func() bool
 
-	// Clipboard keep-vs-restore toggle ("Затирать буфер обмена"). Applies
-	// only while direct input is off, i.e. while the text goes through the
-	// clipboard. Unchecked (the default) is the classic route: remember the
-	// clipboard, paste, put it back. Checked leaves the dictation in the
-	// clipboard instead.
+	// OnRestoreDisplacedClipboard puts back the clipboard the last dictation
+	// overwrote. The snapshot is taken when the recording starts — while the
+	// user is still speaking, so nothing on the insert path waits for it — and
+	// this hands it back on demand. Returns whether anything was restored.
 	//
-	// The choice exists because neither behaviour is right everywhere.
-	// Restoring is honest in applications that really ask the selection
-	// owner (GTK fields, terminals, Qt). Chromium/Electron never ask — they
-	// paste a cached copy — so there the restore is what hands them the OLD
-	// clipboard, and the wait for a read that never comes is what makes the
-	// insert crawl. Same shape as the toggles above.
-	IsClipboardReplace       func() bool
-	OnToggleClipboardReplace func() bool
-
-	// OnRestoreDisplacedClipboard puts back whatever the replacing insert
-	// overwrote last — the safety net that makes "затирать буфер обмена"
-	// survivable: the content is snapshotted just before it is displaced,
-	// and this hands it back on demand. Returns whether anything was
-	// restored. The item is hidden until there is something to offer, which
-	// the renderer learns from the tray's SetDisplacedClipboard.
+	// TEXT ONLY, and an empty snapshot restores nothing rather than wiping the
+	// clipboard. A picture never goes back in — see OnSaveDisplacedImage.
 	OnRestoreDisplacedClipboard func() bool
+
+	// OnSaveDisplacedImage writes a picture the last dictation displaced to a
+	// file and returns the path it landed on. It is the only way a snapshotted
+	// image comes back: republishing one would make every text paste on the
+	// desktop return image bytes (see cmd/murrly/clipimage.go). Returns ok
+	// false when there was nothing to save or the write failed.
+	OnSaveDisplacedImage func() (path string, ok bool)
 
 	IsProfanityRemove func() bool
 

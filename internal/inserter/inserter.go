@@ -8,18 +8,14 @@
 //	            accessible field.
 //	typing    — synthesise the characters as key events. Works wherever a
 //	            keyboard does, at the cost of typing time.
-//	clipboard — the legacy route: save the clipboard, put the text in it,
-//	            press the paste chord, put the clipboard back.
+//	clipboard — put the text in the clipboard, press the paste chord, hand
+//	            the clipboard straight back.
 //
-// The clipboard route is last for a reason. X11 selections are served on
-// demand by the owning process, but Chromium/Electron applications cache
-// the selection when ownership changes and paste from that cache, so the
-// instant they actually consume it cannot be observed from outside. Every
-// attempt to time the "put it back" step against that unobservable moment
-// traded one failure for the other: restore too early and the application
-// pastes the OLD clipboard instead of the dictation, restore too late and
-// the user's own clipboard stays displaced. The direct routes have no such
-// window because nothing is ever borrowed.
+// The clipboard route is last because it is the only one the user can see
+// happening: it leaves the dictation in the clipboard and costs a fifth of
+// a second of holding it. It no longer tries to put the previous clipboard
+// back — that snapshot is taken when recording starts and offered from the
+// tray — so the route has no borrowed state and no window to get wrong.
 package inserter
 
 import (
@@ -62,20 +58,6 @@ type Chain struct {
 }
 
 func NewChain(routes ...Inserter) *Chain { return &Chain{routes: routes} }
-
-// OnClipboardDisplaced wires the displaced-clipboard callback into whichever
-// clipboard route the chain ended up with, so the caller can collect what a
-// replacing insert overwrites without ForMode growing another parameter for
-// something only one route understands. A chain without a clipboard route
-// (pure direct input) silently ignores it — there is nothing there to
-// displace.
-func (c *Chain) OnClipboardDisplaced(fn func(any)) {
-	for _, r := range c.routes {
-		if clip, ok := r.(*Clipboard); ok {
-			clip.OnDisplaced = fn
-		}
-	}
-}
 
 // failureSuffix appends what the earlier routes complained about, so a slow
 // or surprising delivery can be traced without turning on anything extra.
@@ -141,15 +123,12 @@ const (
 // values, so reaching here with something else means a caller bypassed it,
 // and inserting the dictation by the most compatible route beats dropping
 // it on the floor.
-// replaceClipboard picks which of the two clipboard behaviours the route
-// uses: false (the default) borrows the clipboard and puts it back, true
-// leaves the dictation in it. See Clipboard.Replace.
-func ForMode(mode string, typeDelayMs int, cb ClipboardBackend, p PasterBackend, pasteDelay time.Duration, replaceClipboard bool) *Chain {
+func ForMode(mode string, typeDelayMs int, cb ClipboardBackend, p PasterBackend) *Chain {
 	clip := func() []Inserter {
 		if cb == nil || p == nil {
 			return nil
 		}
-		return []Inserter{&Clipboard{CB: cb, Paster: p, PasteDelay: pasteDelay, Replace: replaceClipboard}}
+		return []Inserter{&Clipboard{CB: cb, Paster: p}}
 	}
 	var c *Chain
 	switch mode {

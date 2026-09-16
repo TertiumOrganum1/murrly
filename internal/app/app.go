@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tertiumorganum1/murrly/internal/inserter"
 	"github.com/tertiumorganum1/murrly/internal/ruprofane"
 )
 
@@ -110,22 +109,6 @@ type Picker interface {
 	Pick(variants []Variant) (index int, ok bool)
 }
 
-// Clipboard returns an opaque snapshot from Save that is passed back to
-// Restore. The app does not introspect it.
-type Clipboard interface {
-	Save() (any, error)
-	Set(string) error
-	Restore(any) error
-}
-
-type Paster interface {
-	// Paste synthesises the paste keystroke. beforeKey is invoked once the
-	// paster has settled and is about to press the keys — the last moment
-	// before the target application can possibly fetch the clipboard. It is
-	// never nil; pass a no-op when there is nothing to arm.
-	Paste(beforeKey func()) error
-}
-
 // Inserter delivers the recognized text to the focused field. The route
 // (accessible-object write, synthetic typing, clipboard paste, or a
 // fallback chain of them) is chosen by configuration and is none of the
@@ -137,15 +120,19 @@ type Inserter interface {
 type Config struct {
 	Recorder    Recorder
 	Transcriber Transcriber
-	Clipboard   Clipboard
-	Paster      Paster
-	// Inserter, when set, is how recognized text reaches the field. Left
-	// nil it defaults to the clipboard route built from Clipboard/Paster
-	// above, which is what every caller did before insertion became
-	// configurable.
-	Inserter     Inserter
-	OnState      func(State)
-	OnTranscript func(string)
+	// Inserter is how recognized text reaches the field. Required: the App
+	// has no default route of its own, because which one to use is a
+	// configuration decision made in main.
+	Inserter Inserter
+	// OnRecordStart runs the moment a recording begins, before anything is
+	// recognised. It exists for work that must happen while the user is
+	// still speaking rather than on the insert path — snapshotting the
+	// clipboard the dictation is about to overwrite. It runs on the App
+	// goroutine, so it must not block: anything that can wait on another
+	// process belongs in a goroutine of its own.
+	OnRecordStart func()
+	OnState       func(State)
+	OnTranscript  func(string)
 	// AdjustText is an optional last-mile hook applied after the
 	// transcriber finishes filtering and before the text reaches the
 	// clipboard. It exists for context-aware adjustments — e.g. read
@@ -169,8 +156,7 @@ type Config struct {
 	// Notify shows a transient desktop notification (title, body). Used for
 	// the silent-mic case — a NON-error condition that must not raise the red
 	// error icon. nil → no notification.
-	Notify     func(title, body string)
-	PasteDelay time.Duration
+	Notify func(title, body string)
 	// MultiTranscriber, when non-nil, switches F12/Ctrl+F12 to
 	// multi-inference: run N variants, score, insert the best, cache the
 	// rest. nil → single-pass via Transcriber (current behavior).
@@ -312,21 +298,6 @@ const (
 )
 
 func New(cfg Config) *App {
-	if cfg.PasteDelay == 0 {
-		cfg.PasteDelay = 80 * time.Millisecond
-	}
-	// insertion route (see SetInserter): the config value is the initial
-	// choice; the tray toggle may replace it later.
-	if cfg.Inserter == nil {
-		// Default to the route every caller used before insertion became
-		// configurable, so a Config that only wires Clipboard/Paster keeps
-		// working unchanged.
-		cfg.Inserter = &inserter.Clipboard{
-			CB:         cfg.Clipboard,
-			Paster:     cfg.Paster,
-			PasteDelay: cfg.PasteDelay,
-		}
-	}
 	a := &App{cfg: cfg, state: StateIdle}
 	a.padSilence.Store(cfg.PadSilence)
 	a.multiOn.Store(cfg.MultiInference)
@@ -384,6 +355,15 @@ func (a *App) Run(ctx context.Context, events <-chan Event) {
 	}
 }
 
+// recordStarted fires the OnRecordStart hook once a recording is actually
+// running. It is called after Recorder.Start succeeds, so a microphone that
+// failed to open does not make us disturb the clipboard for nothing.
+func (a *App) recordStarted() {
+	if a.cfg.OnRecordStart != nil {
+		a.cfg.OnRecordStart()
+	}
+}
+
 func (a *App) handle(ev Event) {
 	switch a.state {
 	case StateIdle, StateError:
@@ -395,6 +375,7 @@ func (a *App) handle(ev Event) {
 				a.setState(StateError)
 				return
 			}
+			a.recordStarted()
 			a.setState(StateRecording)
 		case EventKeyDownForceMid:
 			// Ctrl+Shift+F12: same recording path as F12, but the insert is
@@ -405,6 +386,7 @@ func (a *App) handle(ev Event) {
 				a.setState(StateError)
 				return
 			}
+			a.recordStarted()
 			a.setState(StateRecording)
 		case EventReprocess:
 			a.forceMid = false

@@ -15,11 +15,10 @@ var capsLockOnRe = regexp.MustCompile(`(?i)Caps Lock:\s*on`)
 // the physical key still going up while we press Ctrl — intermittently
 // dropped the Ctrl and typed a literal "v" instead of pasting.
 //
-// Was 300 ms, which is most of a third of a second added to every insert
-// before anything happens. The race it guards against is over as soon as
-// the key is up, and the transcription itself takes far longer than the
-// user's finger — by the time we get here the key has been released for a
-// while. Halved; raise it again if a literal "v" ever reappears.
+// It is a window measured from the key release, not a flat sleep — see
+// settleRemaining in paster.go. On a dictation it has always fully elapsed
+// during transcription, so the insert pays nothing; raise the window if a
+// literal "v" ever reappears on the paths that do paste immediately.
 const pasteSettleDelay = 150 * time.Millisecond
 
 // Paste sends Ctrl+V to the currently focused window via xdotool. The
@@ -45,7 +44,7 @@ func (p *Paster) Paste(beforeKey func()) error {
 // read before releasing V turns that coin flip into a wait for an event we
 // can actually see.
 func (p *Paster) PasteReady(beforeKey func(), ready func()) error {
-	time.Sleep(pasteSettleDelay)
+	time.Sleep(settleRemaining(pasteSettleDelay))
 	capsBefore := capsLockOn()
 	// Last moment before the target application can fetch the clipboard.
 	if beforeKey != nil {

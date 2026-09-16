@@ -81,7 +81,7 @@ func (p *Paster) ReleaseModifiers() {
 // down explicitly around the V (down ctrl → down v → up v → up ctrl) so the
 // modifier is guaranteed present for the keypress.
 func (p *Paster) Paste(beforeKey func()) error {
-	time.Sleep(pasteSettleDelay)
+	time.Sleep(settleRemaining(pasteSettleDelay))
 	beforeKey()
 
 	events := []input{
