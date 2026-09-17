@@ -36,7 +36,17 @@ type WhisperConfig struct {
 	Model string `toml:"model"`
 	// ModelPath is an absolute or ~-expanded path to a .bin file.
 	// Used directly if set and Model is empty.
-	ModelPath   string `toml:"model_path"`
+	ModelPath string `toml:"model_path"`
+	// Device picks the backend the model is loaded onto: "auto" (default),
+	// "cuda" or "cpu". It is a model-LOAD parameter — whisper.cpp decides
+	// where the weights live when it reads them — so changing it means
+	// reloading the model, which is what the tray toggle does.
+	//
+	// "auto" and "cuda" differ only in intent, not in outcome: both prefer
+	// the GPU and both fall back to the CPU when the weights plainly do not
+	// fit in the free VRAM. The fallback is not a courtesy — a cudaMalloc
+	// that fails half-way through a load leaves the driver holding memory
+	// nothing reclaims, so a load that cannot succeed must not be attempted.
 	Device      string `toml:"device"`
 	ComputeType string `toml:"compute_type"`
 	Language    string `toml:"language"`
@@ -199,6 +209,29 @@ func normalizeInsertMode(v string) string {
 	}
 }
 
+// Whisper.Device values.
+const (
+	DeviceAuto = "auto"
+	DeviceCUDA = "cuda"
+	DeviceCPU  = "cpu"
+)
+
+// normalizeDevice maps a configured value to a known backend. "gpu" is
+// accepted as a synonym for "cuda" because it is what everybody types.
+// Anything else — a typo, an empty field in an old config — becomes "auto",
+// which prefers the GPU anyway, so a mistyped value cannot silently cost the
+// user the card.
+func normalizeDevice(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case DeviceCPU:
+		return DeviceCPU
+	case DeviceCUDA, "gpu":
+		return DeviceCUDA
+	default:
+		return DeviceAuto
+	}
+}
+
 func defaults() Config {
 	return Config{
 		Hotkey: HotkeyConfig{Key: "F12", Mode: "push_to_talk"},
@@ -211,7 +244,7 @@ func defaults() Config {
 			// short-name back to config.
 			Model:               "",
 			ModelPath:           "", // optional absolute path; ignored if Model is set
-			Device:              "cuda",
+			Device:              DeviceAuto,
 			ComputeType:         "float16",
 			Language:            "",
 			BeamSize:            defaultBeamSize(),            // platform-tuned: Linux 5, macOS 1
@@ -290,6 +323,7 @@ func Load(path string) (Config, error) {
 		cfg.Output.RecentTranscripts = 50
 	}
 
+	cfg.Whisper.Device = normalizeDevice(cfg.Whisper.Device)
 	cfg.Output.InsertMode = normalizeInsertMode(cfg.Output.InsertMode)
 	// 0 means "not in this config" (or an old one) rather than "type
 	// instantly" — a literal zero delay makes several toolkits drop

@@ -23,10 +23,45 @@ type transcriberLoader struct {
 	mu  sync.RWMutex
 	tr  *transcriber.Transcriber
 	cfg config.WhisperConfig
+	// tc is the config the live Transcriber was actually built from, kept
+	// because cfg alone no longer describes it: after a model hot-swap cfg
+	// names the model by short name with ModelPath cleared, and the backend
+	// (UseGPU) may differ from what the config asked for if the weights did
+	// not fit in VRAM at startup.
+	tc transcriber.Config
 }
 
-func newTranscriberLoader(initial *transcriber.Transcriber, cfg config.WhisperConfig) *transcriberLoader {
-	return &transcriberLoader{tr: initial, cfg: cfg}
+func newTranscriberLoader(initial *transcriber.Transcriber, cfg config.WhisperConfig, tc transcriber.Config) *transcriberLoader {
+	return &transcriberLoader{tr: initial, cfg: cfg, tc: tc}
+}
+
+// Config returns the config the live Transcriber was built from.
+func (l *transcriberLoader) Config() transcriber.Config {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.tc
+}
+
+// ReloadTo rebuilds the Transcriber from tc — used for the GPU/CPU switch,
+// where the model file itself may change too (the CPU gets the quantized
+// model). Same swap discipline as Reload: build first, take the write lock
+// only to publish, close the old one outside the lock.
+func (l *transcriberLoader) ReloadTo(tc transcriber.Config) error {
+	newTr, err := transcriber.New(tc)
+	if err != nil {
+		return fmt.Errorf("load model %q: %w", tc.ModelPath, err)
+	}
+
+	l.mu.Lock()
+	old := l.tr
+	l.tr = newTr
+	l.tc = tc
+	l.mu.Unlock()
+
+	if old != nil {
+		_ = old.Close()
+	}
+	return nil
 }
 
 // Transcribe implements app.Transcriber so the loader can be plugged in
@@ -72,13 +107,18 @@ func (l *transcriberLoader) Reload(modelName string) error {
 	newCfg.Model = modelName
 	newCfg.ModelPath = ""
 
-	newTr, err := transcriber.New(transcriber.Config{
+	// The backend carries over: picking another model is not a statement
+	// about where it should run, and a CPU fallback taken at startup would
+	// otherwise be silently undone by a model switch.
+	tc := transcriber.Config{
 		ModelPath:     modelPath,
 		Language:      newCfg.Language,
 		BeamSize:      newCfg.BeamSize,
 		BeamAdaptive:  newCfg.BeamAdaptive,
 		InitialPrompt: newCfg.InitialPrompt,
-	})
+		UseGPU:        l.Config().UseGPU,
+	}
+	newTr, err := transcriber.New(tc)
 	if err != nil {
 		return fmt.Errorf("load model %q: %w", modelName, err)
 	}
@@ -87,6 +127,7 @@ func (l *transcriberLoader) Reload(modelName string) error {
 	old := l.tr
 	l.tr = newTr
 	l.cfg = newCfg
+	l.tc = tc
 	l.mu.Unlock()
 
 	_ = old.Close()
@@ -105,13 +146,18 @@ func (l *transcriberLoader) ReloadConfig(cfgPath string) error {
 		return fmt.Errorf("read config: %w", err)
 	}
 
-	newTr, err := transcriber.New(transcriber.Config{
-		ModelPath:     cfg.Whisper.ModelPath,
+	// device is re-read here — this is the one path where the user edited
+	// the file by hand, so a device= they just changed should take effect.
+	useGPU, modelPath := chooseBackend(cfg.Whisper)
+	tc := transcriber.Config{
+		ModelPath:     modelPath,
 		Language:      cfg.Whisper.Language,
 		BeamSize:      cfg.Whisper.BeamSize,
 		BeamAdaptive:  cfg.Whisper.BeamAdaptive,
 		InitialPrompt: cfg.Whisper.InitialPrompt,
-	})
+		UseGPU:        useGPU,
+	}
+	newTr, err := transcriber.New(tc)
 	if err != nil {
 		return fmt.Errorf("rebuild transcriber: %w", err)
 	}
@@ -120,11 +166,12 @@ func (l *transcriberLoader) ReloadConfig(cfgPath string) error {
 	old := l.tr
 	l.tr = newTr
 	l.cfg = cfg.Whisper
+	l.tc = tc
 	l.mu.Unlock()
 
 	_ = old.Close()
-	log.Printf("transcriber: config reloaded (model=%s beam=%d lang=%q)",
-		cfg.Whisper.Model, cfg.Whisper.BeamSize, cfg.Whisper.Language)
+	log.Printf("transcriber: config reloaded (model=%s beam=%d lang=%q backend=%s)",
+		cfg.Whisper.Model, cfg.Whisper.BeamSize, cfg.Whisper.Language, backendLabel(useGPU))
 	return nil
 }
 
@@ -199,6 +246,22 @@ func persistProfanityFilter(cfgPath string, cfg config.Config, on bool) error {
 // persist helpers.
 func persistInsertMode(cfgPath string, cfg config.Config, mode string) error {
 	cfg.Output.InsertMode = mode
+	f, err := os.Create(cfgPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return toml.NewEncoder(f).Encode(cfg)
+}
+
+// persistWhisperDevice writes the GPU/CPU choice to config.toml. Written as
+// an explicit "cuda" rather than back to "auto" so the next start honours the
+// choice instead of re-deciding it from whatever VRAM happens to be free.
+func persistWhisperDevice(cfgPath string, cfg config.Config, useGPU bool) error {
+	cfg.Whisper.Device = config.DeviceCPU
+	if useGPU {
+		cfg.Whisper.Device = config.DeviceCUDA
+	}
 	f, err := os.Create(cfgPath)
 	if err != nil {
 		return err

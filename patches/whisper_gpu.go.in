@@ -1,0 +1,36 @@
+// This file is copied into third_party/whisper.cpp/bindings/go/whisper_gpu.go
+// by scripts/ensure-whisper-cpp.sh. The vendored whisper.cpp is a shallow
+// clone of upstream master, not a submodule, so anything edited inside it is
+// lost on the next re-clone; adding a whole new file instead of patching an
+// existing one means there are no context lines to drift and the copy is
+// idempotent. The .in suffix keeps it out of our own build — it belongs to the
+// binding's package, not to ours.
+//
+// Upstream's Whisper_init hardcodes whisper_context_default_params(), whose
+// use_gpu is true. use_gpu is a MODEL-LOAD parameter, so switching between GPU
+// and CPU is a model reload, and the only thing missing from the binding is a
+// way to say which one we want.
+
+package whisper
+
+/*
+#include <whisper.h>
+#include <stdlib.h>
+*/
+import "C"
+import "unsafe"
+
+// Whisper_init_with_gpu loads a model with the compute backend chosen
+// explicitly: useGPU false keeps the weights and the whole graph on the CPU
+// even in a CUDA-enabled build. Returns nil if the model cannot be loaded,
+// like Whisper_init.
+func Whisper_init_with_gpu(path string, useGPU bool) *Context {
+	cPath := C.CString(path)
+	defer C.free(unsafe.Pointer(cPath))
+	params := C.whisper_context_default_params()
+	params.use_gpu = C.bool(useGPU)
+	if ctx := C.whisper_init_from_file_with_params(cPath, params); ctx != nil {
+		return (*Context)(ctx)
+	}
+	return nil
+}

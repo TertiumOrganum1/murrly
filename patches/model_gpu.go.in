@@ -1,0 +1,34 @@
+// Copied into third_party/whisper.cpp/bindings/go/pkg/whisper/model_gpu.go by
+// scripts/ensure-whisper-cpp.sh — see the header of patches/whisper_gpu.go.in
+// for why these arrive as new files rather than as a patch.
+//
+// It has to live inside the binding's own package: the cgo types it hands
+// around (*whisper.Context, and the C context behind it) belong to that
+// package and cannot be constructed from ours.
+
+package whisper
+
+import (
+	"os"
+
+	// Bindings
+	whisper "github.com/ggerganov/whisper.cpp/bindings/go"
+)
+
+// NewWithGPU is New with the compute backend chosen by the caller. useGPU
+// false loads the model onto the CPU even when the library was built with
+// CUDA — the backend is fixed at load time, so the choice cannot be revisited
+// without building a new model.
+func NewWithGPU(path string, useGPU bool) (Model, error) {
+	m := new(model)
+	if _, err := os.Stat(path); err != nil {
+		return nil, err
+	}
+	ctx := whisper.Whisper_init_with_gpu(path, useGPU)
+	if ctx == nil {
+		return nil, ErrUnableToLoadModel
+	}
+	m.ctx = ctx
+	m.path = path
+	return m, nil
+}

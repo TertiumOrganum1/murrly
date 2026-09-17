@@ -84,7 +84,7 @@ func (r *Runner) SetScoreMode(mode ScoreMode) {
 }
 
 func openModelSession(cfg transcriber.Config) (*transcriber.Model, *transcriber.Session, error) {
-	m, err := transcriber.OpenModel(cfg.ModelPath)
+	m, err := transcriber.OpenModel(cfg.ModelPath, cfg.UseGPU)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -118,6 +118,28 @@ func (r *Runner) ReloadConfig(cfg transcriber.Config) error {
 	r.model, r.session, r.cfg = m, s, cfg
 	r.mu.Unlock()
 	return old.Close()
+}
+
+// Config is the transcriber config the live model and session were built
+// from — including which backend the weights went to, which is not always
+// what the config asked for.
+func (r *Runner) Config() transcriber.Config {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cfg
+}
+
+// SetCount changes how many variants subsequent batches produce. Used by the
+// GPU/CPU switch: the variant batch runs the same audio over and over, which
+// the card absorbs and the processor does not, so a move to the CPU drops the
+// count to one. Takes the batch lock, so it cannot change the count mid-batch.
+func (r *Runner) SetCount(n int) {
+	if n < 1 {
+		n = 1
+	}
+	r.mu.Lock()
+	r.count = n
+	r.mu.Unlock()
 }
 
 // Count is the number of variants this runner produces per recording.

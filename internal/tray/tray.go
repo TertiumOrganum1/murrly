@@ -237,6 +237,14 @@ func (t *Tray) onReady() {
 	directChecked := t.actions.IsDirectInsert != nil && t.actions.IsDirectInsert()
 	directItem := systray.AddMenuItemCheckbox("Прямой ввод", "Вставлять текст прямо в поле (через шину доступности, иначе набором на клавиатуре), не трогая буфер обмена. Выключено — через буфер обмена: положить туда фразу, нажать Ctrl+V и сразу отпустить буфер. Прямой ввод не трогает буфер вовсе, но длинную фразу набирает несколько секунд", directChecked)
 
+	// GPU/CPU. Shown only when the callback is wired — see
+	// menuactions.Actions.IsGPUInference.
+	var gpuItem *systray.MenuItem
+	if t.actions.OnToggleGPUInference != nil {
+		gpuChecked := t.actions.IsGPUInference != nil && t.actions.IsGPUInference()
+		gpuItem = systray.AddMenuItemCheckbox("Распознавание на видеокарте", "Держать модель в видеопамяти. Выключено — модель грузится в обычную память и считает на процессоре: в несколько раз медленнее, зато видеокарта свободна. Переключение перезагружает модель, это занимает пару секунд", gpuChecked)
+	}
+
 	profanityRemoveChecked := t.actions.IsProfanityRemove != nil && t.actions.IsProfanityRemove()
 	profanityRemoveItem := systray.AddMenuItemCheckbox("Вырезать, а не маскировать", "Когда «Фильтр лексики» включён — вырезать обсценные слова целиком (с прилегающей пунктуацией), а не закрывать «•». Обратимо: оригинал хранится без цензуры", profanityRemoveChecked)
 	// The cut-out option only applies while the filter is on — grey it out
@@ -359,6 +367,28 @@ func (t *Tray) onReady() {
 					mi.SetTitle(contextInsertTitle(true))
 					mi.Disable()
 				}
+			}
+		}()
+	}
+	// GPU/CPU — its own goroutine because the callback reloads the model and
+	// blocks for a second or two; the main select must stay responsive. The
+	// item is disabled meanwhile so a second click cannot start a second
+	// load, and the checkmark follows what the callback reports rather than
+	// what was clicked: a reload that failed leaves the old backend running.
+	if gpuItem != nil {
+		mi := gpuItem
+		go func() {
+			for range mi.ClickedCh {
+				if t.actions.OnToggleGPUInference == nil {
+					continue
+				}
+				mi.Disable()
+				if t.actions.OnToggleGPUInference() {
+					mi.Check()
+				} else {
+					mi.Uncheck()
+				}
+				mi.Enable()
 			}
 		}()
 	}

@@ -103,6 +103,19 @@ type Actions struct {
 	IsDirectInsert       func() bool
 	OnToggleDirectInsert func() bool
 
+	// GPU/CPU toggle ("Распознавание на видеокарте"). Checked means the
+	// model is loaded on the card. Unchecked moves it to the processor:
+	// several times slower, but it frees the VRAM for something else and
+	// keeps dictation working on a machine whose card is busy.
+	//
+	// Flipping it reloads the model — the backend is chosen when the weights
+	// are read and cannot be changed afterwards — so the callback blocks for
+	// the length of a load. Returns the state that actually took effect,
+	// which is the OLD one if the reload failed — a refused load (no VRAM)
+	// and a failed one both leave the previous model running.
+	IsGPUInference       func() bool
+	OnToggleGPUInference func() bool
+
 	// OnRestoreDisplacedClipboard puts back the clipboard the last dictation
 	// overwrote. The snapshot is taken when the recording starts — while the
 	// user is still speaking, so nothing on the insert path waits for it — and

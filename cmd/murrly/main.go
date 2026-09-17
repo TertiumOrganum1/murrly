@@ -121,22 +121,29 @@ func main() {
 	// configured card by UUID, and steps aside when it isn't installed.
 	gpucheck.PreferDevice(cfg.Whisper.PreferredGPU, cfg.Whisper.ModelPath)
 
+	// Where the weights go is decided before anything is loaded — see
+	// chooseBackend. A hopeless GPU load is not attempted at all; we start on
+	// the CPU instead, slowly but alive.
+	useGPU, modelPath := chooseBackend(cfg.Whisper)
+	// The model the GPU side runs, which is not always the one loaded now: a
+	// CPU start is steered to the quantized file. Follows the model picker, so
+	// switching back to the card returns to what the user chose.
+	gpuModelPath := cfg.Whisper.ModelPath
 	trCfg := transcriber.Config{
-		ModelPath:     cfg.Whisper.ModelPath,
+		ModelPath:     modelPath,
 		Language:      cfg.Whisper.Language,
 		BeamSize:      cfg.Whisper.BeamSize,
 		BeamAdaptive:  cfg.Whisper.BeamAdaptive,
 		InitialPrompt: cfg.Whisper.InitialPrompt,
+		UseGPU:        useGPU,
 	}
 
-	// Refuse a hopeless load before ggml starts allocating: a cudaMalloc that
-	// fails part-way through a model load leaves the driver holding memory it
-	// never reclaims. Only the arithmetically certain case is refused (less
-	// free VRAM than the weights themselves), so this cannot block a startup
-	// that would have succeeded.
-	if err := gpucheck.EnsureFree(trCfg.ModelPath); err != nil {
-		desktopNotify("Murrly", "Не хватает видеопамяти — модель не загружена. Подробности в логе.")
-		log.Fatalf("gpucheck: %v", err)
+	// Multi-inference is a GPU luxury: it runs the same audio several times
+	// over, so on the CPU it multiplies an already long wait. One pass there.
+	inferenceCount := cfg.Whisper.MultiInferenceCount
+	if !useGPU && inferenceCount > 1 {
+		log.Printf("cpu: множественное распознавание выключено (было %d прохода)", inferenceCount)
+		inferenceCount = 1
 	}
 
 	// Exactly one inference engine is built, by count:
@@ -148,7 +155,7 @@ func main() {
 	var loader *transcriberLoader
 	var multiRunner *multiinfer.Runner
 	scoreMode := multiinfer.ParseScoreMode(cfg.Whisper.ScoringMode)
-	if n := cfg.Whisper.MultiInferenceCount; n > 1 {
+	if n := inferenceCount; n > 1 {
 		multiRunner, err = multiinfer.New(trCfg, n, scoreMode)
 		if err != nil {
 			log.Fatalf("multi-inference: %v", err)
@@ -159,7 +166,7 @@ func main() {
 		if terr != nil {
 			log.Fatalf("transcriber: %v", terr)
 		}
-		loader = newTranscriberLoader(tr, cfg.Whisper)
+		loader = newTranscriberLoader(tr, cfg.Whisper, trCfg)
 	}
 
 	// Releasing the model is whisper_free, which tears down the ggml-CUDA (or
@@ -212,7 +219,13 @@ func main() {
 			}
 			return multiRunner.Reload(filepath.Join(dir, "ggml-"+name+".bin"))
 		}
-		return loader.Reload(name)
+		if err := loader.Reload(name); err != nil {
+			return err
+		}
+		if dir, derr := paths.ModelsDir(); derr == nil {
+			gpuModelPath = filepath.Join(dir, "ggml-"+name+".bin")
+		}
+		return nil
 	}
 	reloadConfig := func() error {
 		if multiRunner != nil {
@@ -220,15 +233,37 @@ func main() {
 			if lerr != nil {
 				return lerr
 			}
-			return multiRunner.ReloadConfig(transcriber.Config{
-				ModelPath:     newCfg.Whisper.ModelPath,
+			// device= is re-read with the rest of the file, and the VRAM
+			// check runs again: a hand edit is the one place the user can
+			// move inference to the processor without the tray.
+			newGPU, newPath := chooseBackend(newCfg.Whisper)
+			if err := multiRunner.ReloadConfig(transcriber.Config{
+				ModelPath:     newPath,
 				Language:      newCfg.Whisper.Language,
 				BeamSize:      newCfg.Whisper.BeamSize,
 				BeamAdaptive:  newCfg.Whisper.BeamAdaptive,
 				InitialPrompt: newCfg.Whisper.InitialPrompt,
-			})
+				UseGPU:        newGPU,
+			}); err != nil {
+				return err
+			}
+			n := newCfg.Whisper.MultiInferenceCount
+			if !newGPU {
+				n = 1
+			}
+			multiRunner.SetCount(n)
+			gpuModelPath = newCfg.Whisper.ModelPath
+			return nil
 		}
-		return loader.ReloadConfig(cfgPath)
+		if err := loader.ReloadConfig(cfgPath); err != nil {
+			return err
+		}
+		// Keep the GPU-side model in step with the file the user just edited,
+		// so a later switch back to the card goes to what it now names.
+		if newCfg, lerr := config.Load(cfgPath); lerr == nil {
+			gpuModelPath = newCfg.Whisper.ModelPath
+		}
+		return nil
 	}
 
 	cb := clipboard.New()
@@ -491,6 +526,66 @@ func main() {
 		cfg.Output.InsertMode = mode
 		log.Printf("insert: mode %q (routes: %s)", mode, routes.Name())
 		return on
+	}
+
+	// GPU ⇄ CPU while running. The backend is fixed when the weights are
+	// read, so this is a model reload, not a setting: the old model is torn
+	// down and a new one is built on the other side. The whole point is the
+	// case where the card is needed for something else — a dictation that
+	// takes several times longer still beats no dictation at all.
+	//
+	// Both engines answer it: whichever one was built holds the live config,
+	// takes the new one, and reloads under its own inference lock.
+	liveBackend := func() transcriber.Config {
+		if multiRunner != nil {
+			return multiRunner.Config()
+		}
+		return loader.Config()
+	}
+	applyBackend := func(tc transcriber.Config) error {
+		if multiRunner != nil {
+			return multiRunner.ReloadConfig(tc)
+		}
+		return loader.ReloadTo(tc)
+	}
+	actions.IsGPUInference = func() bool { return liveBackend().UseGPU }
+	actions.OnToggleGPUInference = func() bool {
+		tc := liveBackend()
+		want := !tc.UseGPU
+		next := tc
+		next.UseGPU = want
+		if want {
+			next.ModelPath = gpuModelPath
+			if err := gpucheck.EnsureFree(next.ModelPath); err != nil {
+				log.Printf("gpucheck: %v — остаёмся на процессоре", err)
+				desktopNotify("Murrly", "Не хватает видеопамяти — распознавание осталось на процессоре.")
+				return false
+			}
+		} else {
+			next.ModelPath = cpuModelPath(gpuModelPath)
+		}
+		if err := applyBackend(next); err != nil {
+			log.Printf("backend switch: %v", err)
+			desktopNotify("Murrly", "Не удалось переключить распознавание — подробности в логе.")
+			return tc.UseGPU
+		}
+		// The variant batch is a GPU-only luxury — see Runner.SetCount.
+		if multiRunner != nil {
+			n := 1
+			if want {
+				n = cfg.Whisper.MultiInferenceCount
+			}
+			multiRunner.SetCount(n)
+		}
+		if err := persistWhisperDevice(cfgPath, cfg, want); err != nil {
+			log.Printf("device persist: %v", err)
+		}
+		cfg.Whisper.Device = config.DeviceCPU
+		if want {
+			cfg.Whisper.Device = config.DeviceCUDA
+		}
+		log.Printf("распознавание: %s (модель %s)", backendLabel(want), filepath.Base(next.ModelPath))
+		return want
 	}
 
 	// The safety net: put back the clipboard the last dictation overwrote.

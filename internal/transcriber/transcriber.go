@@ -22,6 +22,12 @@ type Config struct {
 	// every call.
 	BeamAdaptive  bool
 	InitialPrompt string
+	// UseGPU chooses the backend the weights are loaded onto. It is fixed
+	// at load time — whisper.cpp builds the graph for one backend when it
+	// reads the model — so switching it means loading a new model, not
+	// reconfiguring this one. False keeps everything on the CPU even in a
+	// CUDA build.
+	UseGPU bool
 }
 
 type Transcriber struct {
@@ -64,7 +70,7 @@ const (
 // allocation overhead is negligible.
 func New(cfg Config) (*Transcriber, error) {
 	t0 := time.Now()
-	m, err := whisper.New(cfg.ModelPath)
+	m, err := whisper.NewWithGPU(cfg.ModelPath, cfg.UseGPU)
 	if err != nil {
 		return nil, fmt.Errorf("load model %s: %w", cfg.ModelPath, err)
 	}
@@ -80,17 +86,27 @@ func New(cfg Config) (*Transcriber, error) {
 			return nil, fmt.Errorf("new context: %w", err)
 		}
 		ctxMs := time.Since(t1).Milliseconds()
-		log.Printf("transcriber: model=%s load=%dms ctx=%dms (total startup=%dms)", cfg.ModelPath, loadMs, ctxMs, loadMs+ctxMs)
+		log.Printf("transcriber: model=%s backend=%s load=%dms ctx=%dms (total startup=%dms)", cfg.ModelPath, backendName(cfg.UseGPU), loadMs, ctxMs, loadMs+ctxMs)
 		if err := configureContext(ctx, cfg); err != nil {
 			_ = m.Close()
 			return nil, err
 		}
 		t.ctx = ctx
 	} else {
-		log.Printf("transcriber: model=%s load=%dms (context allocated per call)", cfg.ModelPath, loadMs)
+		log.Printf("transcriber: model=%s backend=%s load=%dms (context allocated per call)", cfg.ModelPath, backendName(cfg.UseGPU), loadMs)
 	}
 
 	return t, nil
+}
+
+// backendName labels the log line with where the weights went. Worth having
+// in the log: a CPU fallback is otherwise visible only as inference that
+// takes ten times longer.
+func backendName(useGPU bool) string {
+	if useGPU {
+		return "gpu"
+	}
+	return "cpu"
 }
 
 // configureContext applies the user-controlled params (language,
@@ -118,6 +134,11 @@ func configureContext(ctx whisper.Context, cfg Config) error {
 	}
 	if cfg.BeamSize > 0 {
 		ctx.SetBeamSize(cfg.BeamSize)
+	}
+	// Only on the processor: with the weights on the card the threads do
+	// little, and the GPU path's timings were measured as they are.
+	if !cfg.UseGPU {
+		ctx.SetThreads(uint(cpuThreads()))
 	}
 	applyPlatformWhisperParams(ctx)
 	if cfg.InitialPrompt != "" {

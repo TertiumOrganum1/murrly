@@ -22,9 +22,10 @@ type Model struct {
 	m whisper.Model
 }
 
-// OpenModel loads the model weights into VRAM. Call Close to release.
-func OpenModel(path string) (*Model, error) {
-	m, err := whisper.New(path)
+// OpenModel loads the model weights, into VRAM when useGPU is true and into
+// system memory otherwise. Call Close to release.
+func OpenModel(path string, useGPU bool) (*Model, error) {
+	m, err := whisper.NewWithGPU(path, useGPU)
 	if err != nil {
 		return nil, fmt.Errorf("load model %s: %w", path, err)
 	}

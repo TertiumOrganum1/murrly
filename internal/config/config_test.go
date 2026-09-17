@@ -76,6 +76,49 @@ model_path = "~/voice-input-test-model.bin"
 	}
 }
 
+// The device value decides where the weights are loaded, and a value nobody
+// recognises must not cost the user the card — hence "auto" as the fallback
+// rather than "cpu". Only an explicit "cpu" moves inference off the GPU.
+func TestWhisperDeviceDefaultsAndNormalisation(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg, err := Load(filepath.Join(dir, "fresh.toml"))
+	if err != nil {
+		t.Fatalf("Load fresh: %v", err)
+	}
+	if cfg.Whisper.Device != DeviceAuto {
+		t.Errorf("default device: got %q, want %q", cfg.Whisper.Device, DeviceAuto)
+	}
+
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"missing", "[whisper]\nbeam_size = 5\n", DeviceAuto},
+		{"cpu", "[whisper]\ndevice = \"cpu\"\n", DeviceCPU},
+		// What every config written before this setting meant something.
+		{"cuda", "[whisper]\ndevice = \"cuda\"\n", DeviceCUDA},
+		{"gpu is a synonym", "[whisper]\ndevice = \" GPU \"\n", DeviceCUDA},
+		{"unknown value keeps the card", "[whisper]\ndevice = \"tpu\"\n", DeviceAuto},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(dir, c.name+".toml")
+			if err := os.WriteFile(path, []byte(c.body), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.Whisper.Device != c.want {
+				t.Errorf("device: got %q, want %q", cfg.Whisper.Device, c.want)
+			}
+		})
+	}
+}
+
 func TestInsertModeDefaultsAndNormalisation(t *testing.T) {
 	dir := t.TempDir()
 
