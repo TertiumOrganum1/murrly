@@ -50,6 +50,7 @@ func (p *Paster) Paste(beforeKey func()) error {
 // read before releasing V turns that coin flip into a wait for an event we
 // can actually see.
 func (p *Paster) PasteReady(beforeKey func(), ready func()) error {
+	waitKeyboardClear()
 	time.Sleep(settleRemaining(pasteSettleDelay))
 	shift := focusIsTerminal()
 	capsBefore := capsLockOn()
@@ -73,6 +74,52 @@ func (p *Paster) PasteReady(beforeKey func(), ready func()) error {
 		_ = exec.Command("xdotool", "key", "Caps_Lock").Run()
 	}
 	return err
+}
+
+// keyboardClear* — how waitKeyboardClear polls. The cap is there because the
+// user may be genuinely holding something (they started typing over the
+// insert); past it we paste anyway rather than hang on their finger.
+const (
+	keyboardClearPoll = 4 * time.Millisecond
+	keyboardClearCap  = 400 * time.Millisecond
+)
+
+// waitKeyboardClear blocks until X reports no key physically down.
+//
+// pasteSettleDelay was built on the assumption that transcription always
+// outlasts the key release, so the window would have elapsed by itself. That
+// stopped being true when CPU inference got fast: a short phrase now comes
+// back while the finger is still on F12, the settle window turns out to be
+// shorter than a slow release, and the target sees the V without the Ctrl —
+// a literal "v" in the user's text.
+//
+// A longer blind window would be a longer wait for everyone to cover the
+// slowest finger. The keymap is the thing the guess was approximating, so ask
+// for it: XQueryKeymap is one round trip, and on a released keyboard the first
+// probe already answers and nothing is waited for at all.
+func waitKeyboardClear() {
+	conn, ok := x11()
+	if !ok {
+		return
+	}
+	deadline := time.Now().Add(keyboardClearCap)
+	for {
+		reply, err := xproto.QueryKeymap(conn).Reply()
+		if err != nil || reply == nil {
+			return
+		}
+		down := false
+		for _, b := range reply.Keys {
+			if b != 0 {
+				down = true
+				break
+			}
+		}
+		if !down || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(keyboardClearPoll)
+	}
 }
 
 // terminalClasses are the window classes where Ctrl+V is not paste.
