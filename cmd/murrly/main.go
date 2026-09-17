@@ -31,6 +31,7 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/modelinfo"
 	"github.com/tertiumorganum1/murrly/internal/multiinfer"
 	"github.com/tertiumorganum1/murrly/internal/overlay"
+	"github.com/tertiumorganum1/murrly/internal/parakeet"
 	"github.com/tertiumorganum1/murrly/internal/paster"
 	"github.com/tertiumorganum1/murrly/internal/paths"
 	"github.com/tertiumorganum1/murrly/internal/picker"
@@ -114,6 +115,19 @@ func main() {
 		log.Printf("mic probe: %v", err)
 	}
 
+	// Parakeet sits in the same model list as the Whisper files but is not one
+	// of them: it has no ggml file and no CUDA build here. When the config
+	// names it, the Whisper side is pointed at a real file anyway — the model
+	// picker keeps its Whisper entries and a switch back has to land somewhere —
+	// and the backend is pinned to the processor before any of it is decided.
+	startParakeet := cfg.Whisper.Model == modelinfo.Parakeet && parakeet.Present()
+	if startParakeet {
+		cfg.Whisper.Device = config.DeviceCPU
+		if p := whisperFallbackPath(); p != "" {
+			cfg.Whisper.ModelPath = p
+		}
+	}
+
 	// Choose the card BEFORE anything touches CUDA — the driver reads
 	// CUDA_VISIBLE_DEVICES once, at initialisation. CUDA orders devices
 	// fastest-first by default, so leaving the choice to it puts Whisper on
@@ -169,6 +183,28 @@ func main() {
 		loader = newTranscriberLoader(tr, cfg.Whisper, trCfg)
 	}
 
+	// The engine switch is what the app actually talks to. The Whisper engine
+	// built above stays live underneath it whichever recogniser is selected, so
+	// coming back from Parakeet is a menu click and not a model load.
+	eng := &engineSwitch{}
+	if multiRunner != nil {
+		ma := &multiAdapter{r: multiRunner}
+		eng.whisper, eng.multi = ma, ma
+	} else {
+		eng.whisper = loader
+	}
+	if startParakeet {
+		p, perr := parakeet.New(0)
+		if perr != nil {
+			// Not fatal: Whisper is already loaded and working, so a broken
+			// Parakeet download costs the user a model choice, not a Murrly.
+			log.Printf("parakeet: %v — остаёмся на whisper", perr)
+			startParakeet = false
+		} else {
+			eng.UseParakeet(p)
+		}
+	}
+
 	// Releasing the model is whisper_free, which tears down the ggml-CUDA (or
 	// Metal) backend and gives the device buffers back — ~2.5 GB for
 	// large-v3-turbo at beam_size=8. Both engines close under their own
@@ -188,6 +224,12 @@ func main() {
 	var releaseOnce sync.Once
 	releaseModel = func() {
 		releaseOnce.Do(func() {
+			// Parakeet holds only host memory, but it holds it under an
+			// inference lock of its own: close it first and the same way, so
+			// exit cannot land inside a decode.
+			if p := eng.UseParakeet(nil); p != nil {
+				_ = p.Close()
+			}
 			var cerr error
 			switch {
 			case multiRunner != nil:
@@ -209,9 +251,19 @@ func main() {
 	// at the end of main.
 	defer releaseModel()
 
+	// Assigned further down, next to the GPU/CPU switch whose machinery they
+	// reuse: taking Parakeet also hands the card back, and giving it up returns
+	// the card checkbox to the user.
+	var handOverToParakeet func() error
+	var handBackFromParakeet func()
+
 	// switchModel / reloadConfig route the model-picker and reload-config
 	// menu actions to whichever engine is active.
 	switchModel := func(name string) error {
+		if name == modelinfo.Parakeet {
+			return handOverToParakeet()
+		}
+		handBackFromParakeet()
 		if multiRunner != nil {
 			dir, derr := paths.ModelsDir()
 			if derr != nil {
@@ -548,6 +600,55 @@ func main() {
 		}
 		return loader.ReloadTo(tc)
 	}
+	// Parakeet runs on the processor only — there is no CUDA build of it here —
+	// so taking it hands the card back: the Whisper weights, the one thing in
+	// VRAM, move to host memory, and the card checkbox stops being a choice
+	// until a Whisper model is picked again. Failing to free the card is logged
+	// and not fatal: the recogniser has already changed, and a Murrly that
+	// dictates through Parakeet while Whisper still sits in VRAM is worse
+	// housekeeping, not a broken app.
+	handOverToParakeet = func() error {
+		p, err := parakeet.New(0)
+		if err != nil {
+			return err
+		}
+		if old := eng.UseParakeet(p); old != nil {
+			_ = old.Close()
+		}
+		if tc := liveBackend(); tc.UseGPU {
+			next := tc
+			next.UseGPU = false
+			next.ModelPath = cpuModelPath(gpuModelPath)
+			if err := applyBackend(next); err != nil {
+				log.Printf("parakeet: видеокарту освободить не удалось: %v", err)
+			} else {
+				if multiRunner != nil {
+					multiRunner.SetCount(1)
+				}
+				cfg.Whisper.Device = config.DeviceCPU
+				if err := persistWhisperDevice(cfgPath, cfg, false); err != nil {
+					log.Printf("device persist: %v", err)
+				}
+			}
+		}
+		t.SetGPUInference(false, false)
+		log.Printf("распознавание: parakeet (процессор)")
+		return nil
+	}
+
+	// handBackFromParakeet is the other half: a Whisper model was picked, so the
+	// transducer is released and the card is the user's to ask for again. A no-op
+	// when Parakeet was not the live engine, which is every ordinary model pick.
+	handBackFromParakeet = func() {
+		old := eng.UseParakeet(nil)
+		if old == nil {
+			return
+		}
+		_ = old.Close()
+		t.SetGPUInference(liveBackend().UseGPU, true)
+		log.Printf("распознавание: whisper (%s)", backendLabel(liveBackend().UseGPU))
+	}
+
 	actions.IsGPUInference = func() bool { return liveBackend().UseGPU }
 	actions.OnToggleGPUInference = func() bool {
 		tc := liveBackend()
@@ -666,7 +767,7 @@ func main() {
 
 	appCfg := app.Config{
 		Recorder:      recorder.New(),
-		Transcriber:   loader,
+		Transcriber:   eng,
 		Inserter:      insertRoutes,
 		PasteLast:     pasteLast,
 		OnRecordStart: snapshotClipboard,
@@ -703,9 +804,10 @@ func main() {
 	// multi-inference off costs nothing — no second model is loaded. The
 	// picker backs Ctrl+F11 selection.
 	if multiRunner != nil {
-		ma := &multiAdapter{r: multiRunner}
-		appCfg.MultiTranscriber = ma
-		appCfg.Transcriber = ma // single-pass path when the toggle is off
+		// Through the switch, not straight at the runner: the variant batch is
+		// Whisper's, and while Parakeet holds the dictation the switch answers
+		// with its single result instead.
+		appCfg.MultiTranscriber = eng
 		appCfg.MultiInference = cfg.Whisper.MultiInference
 	}
 
@@ -975,7 +1077,15 @@ func presentModels() (names []string, labels []string) {
 		return nil, nil
 	}
 	for _, name := range modelinfo.Available {
-		if _, err := os.Stat(filepath.Join(dir, "ggml-"+name+".bin")); err == nil {
+		// Parakeet is a directory of ONNX graphs, not a ggml file — it answers
+		// the same question ("is this one downloaded?") through its own package.
+		present := false
+		if name == modelinfo.Parakeet {
+			present = parakeet.Present()
+		} else if _, err := os.Stat(filepath.Join(dir, "ggml-"+name+".bin")); err == nil {
+			present = true
+		}
+		if present {
 			names = append(names, name)
 			labels = append(labels, modelinfo.Labels[name])
 		}

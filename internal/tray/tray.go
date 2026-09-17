@@ -27,8 +27,14 @@ type Tray struct {
 	displacedCh     chan displacedState
 	activeModelCh   chan int
 	activeScoringCh chan int
+	gpuCh           chan gpuState
 	actions         *menuactions.Actions
 }
+
+// gpuState is what the «Распознавание на видеокарте» checkbox should show when
+// something other than a click on it changed the answer — picking a model that
+// does not run on a card, for one.
+type gpuState struct{ on, enabled bool }
 
 func New(icons map[State][]byte, actions *menuactions.Actions) *Tray {
 	return &Tray{
@@ -38,6 +44,7 @@ func New(icons map[State][]byte, actions *menuactions.Actions) *Tray {
 		displacedCh:     make(chan displacedState, 8),
 		activeModelCh:   make(chan int, 8),
 		activeScoringCh: make(chan int, 8),
+		gpuCh:           make(chan gpuState, 8),
 		actions:         actions,
 	}
 }
@@ -101,6 +108,16 @@ func (t *Tray) SetActiveModel(index int) {
 func (t *Tray) SetActiveScoring(index int) {
 	select {
 	case t.activeScoringCh <- index:
+	default:
+	}
+}
+
+// SetGPUInference updates the card checkbox from outside its own click
+// handler. enabled=false greys it out: the chosen recogniser has no GPU build
+// here, so the box is not a choice the user has while it is selected.
+func (t *Tray) SetGPUInference(on, enabled bool) {
+	select {
+	case t.gpuCh <- gpuState{on: on, enabled: enabled}:
 	default:
 	}
 }
@@ -197,7 +214,7 @@ func (t *Tray) onReady() {
 		modelItems = make([]*systray.MenuItem, len(t.actions.ModelLabels))
 		for i, lbl := range t.actions.ModelLabels {
 			checked := i == t.actions.ActiveModelIndex
-			modelItems[i] = systray.AddMenuItemCheckbox("Модель: "+lbl, "Переключить модель Whisper", checked)
+			modelItems[i] = systray.AddMenuItemCheckbox("Модель: "+lbl, "Переключить модель распознавания", checked)
 		}
 	}
 
@@ -243,6 +260,11 @@ func (t *Tray) onReady() {
 	if t.actions.OnToggleGPUInference != nil {
 		gpuChecked := t.actions.IsGPUInference != nil && t.actions.IsGPUInference()
 		gpuItem = systray.AddMenuItemCheckbox("Распознавание на видеокарте", "Держать модель в видеопамяти. Выключено — модель грузится в обычную память и считает на процессоре: в несколько раз медленнее, зато видеокарта свободна. Переключение перезагружает модель, это занимает пару секунд", gpuChecked)
+		// The variant batch is off on the processor whatever the config says
+		// — show that instead of leaving a checked item that does nothing.
+		if !gpuChecked {
+			setMultiEnabled(multiItem, false, false)
+		}
 	}
 
 	profanityRemoveChecked := t.actions.IsProfanityRemove != nil && t.actions.IsProfanityRemove()
@@ -383,11 +405,14 @@ func (t *Tray) onReady() {
 					continue
 				}
 				mi.Disable()
-				if t.actions.OnToggleGPUInference() {
+				onGPU := t.actions.OnToggleGPUInference()
+				if onGPU {
 					mi.Check()
 				} else {
 					mi.Uncheck()
 				}
+				setMultiEnabled(multiItem, onGPU,
+					onGPU && t.actions.IsMultiOn != nil && t.actions.IsMultiOn())
 				mi.Enable()
 			}
 		}()
@@ -459,6 +484,21 @@ func (t *Tray) onReady() {
 						item.Uncheck()
 					}
 				}
+			case st := <-t.gpuCh:
+				if gpuItem != nil {
+					if st.on {
+						gpuItem.Check()
+					} else {
+						gpuItem.Uncheck()
+					}
+					if st.enabled {
+						gpuItem.Enable()
+					} else {
+						gpuItem.Disable()
+					}
+				}
+				setMultiEnabled(multiItem, st.on && st.enabled,
+					st.on && st.enabled && t.actions.IsMultiOn != nil && t.actions.IsMultiOn())
 			case idx := <-t.activeScoringCh:
 				for i, item := range scoringItems {
 					if i == idx {
@@ -632,6 +672,26 @@ func (s *transcriptSlots) render(transcripts []string) {
 			item.SetTitle(want)
 		}
 		s.shown[i] = want
+	}
+}
+
+// setMultiEnabled greys out the variant-batch checkbox while inference is on
+// the processor: the runner is forced down to a single pass there, so leaving
+// the box checked would promise a batch nobody is running. checked is what the
+// box should show once it is clickable again.
+func setMultiEnabled(item *systray.MenuItem, enabled, checked bool) {
+	if item == nil {
+		return
+	}
+	if checked {
+		item.Check()
+	} else {
+		item.Uncheck()
+	}
+	if enabled {
+		item.Enable()
+	} else {
+		item.Disable()
 	}
 }
 

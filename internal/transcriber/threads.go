@@ -22,6 +22,10 @@ import (
 // So: one thread per physical core. MURRLY_THREADS overrides it — that is the
 // knob those numbers were produced with, and another CPU may well want a
 // different point on that curve.
+// CPUThreads is cpuThreads for the other engine in this app: it runs on the
+// same processor, so the curve below is its curve too.
+func CPUThreads() int { return cpuThreads() }
+
 func cpuThreads() int {
 	if v, err := strconv.Atoi(os.Getenv("MURRLY_THREADS")); err == nil && v > 0 {
 		return v

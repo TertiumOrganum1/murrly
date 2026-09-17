@@ -90,6 +90,16 @@ test: whisper
 	LIBRARY_PATH="$(LIBRARY_PATH)" \
 	go test -ldflags "-extldflags '$(CUDA_LDFLAGS)'" ./...
 
+# Same environment, one package: `make test-pkg PKG=./internal/parakeet`.
+# The full suite loads speech models from disk, so narrowing it is the
+# difference between a few seconds and a few minutes.
+PKG ?= ./...
+ARGS ?=
+test-pkg: whisper
+	C_INCLUDE_PATH="$(INCLUDE_PATH)" \
+	LIBRARY_PATH="$(LIBRARY_PATH)" \
+	go test -ldflags "-extldflags '$(CUDA_LDFLAGS)'" $(ARGS) $(PKG)
+
 install: build
 	INSTALL_DATA_DIR="$(INSTALL_DATA_DIR)" scripts/install-linux.sh
 

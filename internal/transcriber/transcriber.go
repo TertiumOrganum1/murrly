@@ -235,6 +235,14 @@ func (t *Transcriber) chooseBeam(pcm []float32) int {
 			beam = shortAudioBeamSize
 		}
 	}
+	// On the processor the beam is what the wait is made of. The encoder
+	// runs the 30 s window once either way; beam=5 then runs the decoder
+	// five times over, and on a CPU that is most of the clock — measured
+	// on a 5950X with q5_0: ~13.5 s per phrase at beam=5 against ~6 s of
+	// encoder alone. The card swallows the beam, this machine does not.
+	if !t.cfg.UseGPU && beam > shortAudioBeamSize {
+		beam = shortAudioBeamSize
+	}
 	return beam
 }
 

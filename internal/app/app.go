@@ -91,7 +91,10 @@ type Variant struct {
 }
 
 // Engine model tags carried on Variant.Model.
-const ModelWhisper = "whisper"
+const (
+	ModelWhisper  = "whisper"
+	ModelParakeet = "parakeet"
+)
 
 // MultiTranscriber runs several inference variants over one sample and
 // returns them ranked best-first. leadOffsetSec is added to every

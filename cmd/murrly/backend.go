@@ -10,12 +10,21 @@ import (
 	"github.com/tertiumorganum1/murrly/internal/paths"
 )
 
-// cpuModelName is the model CPU inference is steered to. large-v3-turbo on
-// the CPU is minutes per dictation; the q5_0 quantization of the same model
-// is a few times smaller and is the only variant worth waiting for without a
-// card. Steered, not forced — if the file was never downloaded we stay on
-// whatever the config names rather than failing to start.
-const cpuModelName = "large-v3-turbo-q5_0"
+// cpuModelNames are the models CPU inference is steered to, best first.
+// large-v3-turbo on the CPU is minutes per dictation; the q5_0 quantization of
+// the same model is a few times smaller and is the only variant worth waiting
+// for without a card.
+//
+// medium-q5_0 goes first: on this processor it encodes in roughly half the
+// time of the large family and still holds Russian. small-q5_1 is faster
+// again and is deliberately NOT here — on Russian dictation it produced a
+// Spanish hallucination on one phrase and an empty string on the next, and a
+// fast wrong answer is not a faster Murrly. It stays reachable through the
+// tray model picker for anyone who wants to judge it themselves.
+//
+// Steered, not forced — if none of these was downloaded we stay on whatever
+// the config names rather than failing to start.
+var cpuModelNames = []string{"medium-q5_0", "large-v3-turbo-q5_0"}
 
 // chooseBackend decides where the model is loaded and which file is loaded,
 // from the configured device plus what the cards actually have free.
@@ -45,17 +54,41 @@ func cpuModelPath(configured string) string {
 	if err != nil {
 		return configured
 	}
-	quantized := filepath.Join(dir, "ggml-"+cpuModelName+".bin")
-	if quantized == configured {
-		return configured
+	for _, name := range cpuModelNames {
+		candidate := filepath.Join(dir, "ggml-"+name+".bin")
+		if candidate == configured {
+			return configured
+		}
+		if _, err := os.Stat(candidate); err != nil {
+			continue
+		}
+		log.Printf("cpu: модель %s вместо %s", filepath.Base(candidate), filepath.Base(configured))
+		return candidate
 	}
-	if _, err := os.Stat(quantized); err != nil {
-		log.Printf("cpu: %s не скачана, остаёмся на %s — на процессоре это будет долго",
-			filepath.Base(quantized), filepath.Base(configured))
-		return configured
+	log.Printf("cpu: быстрая модель не скачана, остаёмся на %s — на процессоре это будет долго",
+		filepath.Base(configured))
+	return configured
+}
+
+// whisperFallbackPath is the model file the Whisper side is pointed at when the
+// config names Parakeet. Parakeet has no ggml file, but the Whisper engine is
+// still built underneath it — that is what makes a switch back a menu click
+// instead of a model load — and it has to be built from something that exists.
+//
+// Returns "" when no Whisper model is downloaded at all, which leaves the
+// caller on the configured path and its existing failure handling.
+func whisperFallbackPath() string {
+	dir, err := paths.ModelsDir()
+	if err != nil {
+		return ""
 	}
-	log.Printf("cpu: модель %s вместо %s", filepath.Base(quantized), filepath.Base(configured))
-	return quantized
+	for _, name := range append(append([]string{}, cpuModelNames...), "large-v3-turbo") {
+		candidate := filepath.Join(dir, "ggml-"+name+".bin")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // backendLabel is the word that goes in the log and in the tray tooltip.
